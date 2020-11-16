@@ -58,6 +58,28 @@ struct module {
 	char package[0];
 };
 
+/**
+ * Callable symbol bound to a module.
+ */
+struct module_sym {
+	/**
+	 * Anchor for module membership.
+	 */
+	struct rlist item;
+	/**
+	 * For C functions, address of the function.
+	 */
+	box_function_f addr;
+	/**
+	 * A module the symbol belongs to.
+	 */
+	struct module *module;
+	/**
+	 * Function name definition.
+	 */
+	char *name;
+};
+
 /** Virtual method table for func object. */
 struct func_vtab {
 	/** Call function with given arguments. */
@@ -107,6 +129,26 @@ func_delete(struct func *func);
  */
 int
 func_call(struct func *func, struct port *args, struct port *ret);
+
+/**
+ * Resolve C entry (find the respective DLL and fetch the
+ * symbol from it).
+ *
+ * @param mod_sym module symbol pointer.
+ * @retval -1 on error.
+ * @retval 0 on success.
+ */
+int
+module_sym_load(struct module_sym *mod_sym);
+
+/**
+ * Unload module symbol and drop it from the package
+ * cache if there is no users left.
+ *
+ * @param mod_sym module symbol pointer.
+ */
+void
+module_sym_unload(struct module_sym *mod_sym);
 
 /**
  * Reload dynamically loadable module.
