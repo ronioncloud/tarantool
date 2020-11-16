@@ -82,6 +82,10 @@ struct sql_stmt_cache {
 	 * times.
 	 */
 	struct stmt_cache_entry *last_found;
+	/**
+	 * saved hash id for the last_found entry
+	 */
+	uint32_t last_id; // FIXME
 };
 
 /**
