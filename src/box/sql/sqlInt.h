@@ -2131,6 +2131,16 @@ enum ast_type {
 	ast_type_MAX
 };
 
+struct parsed_ast {
+	enum ast_type ast_type;	/**< Type of parsed_ast member. */
+	bool keep_ast;		/**< Keep AST after .parse */
+	union {
+		struct Expr *expr;
+		struct Select *select;
+		struct sql_trigger *trigger;
+	};
+};
+
 /*
  * An SQL parser context.  A copy of this structure is passed through
  * the parser and down into all the parser action routine in order to
@@ -2276,19 +2286,13 @@ struct Parse {
 	bool initiateTTrans;	/* Initiate Tarantool transaction */
 	/** If set - do not emit byte code at all, just parse.  */
 	bool parse_only;
-	/** Type of parsed_ast member. */
-	enum ast_type parsed_ast_type;
 	/** SQL options which were used to compile this VDBE. */
 	uint32_t sql_flags;
 	/**
-	 * Members of this union are valid only
-	 * if parse_only is set to true.
+	 * Members of this structure are filled only
+	 * if @parse_only is set to true.
 	 */
-	union {
-		struct Expr *expr;
-		struct Select *select;
-		struct sql_trigger *trigger;
-	} parsed_ast;
+	struct parsed_ast parsed_ast;
 };
 
 /*
