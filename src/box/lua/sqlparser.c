@@ -1,3 +1,4 @@
+#include "diag.h"
 #include "execute.h"
 #include "lua/utils.h"
 #include "sqlInt.h"
@@ -8,9 +9,25 @@
 #include "../box.h"		// FIXME
 #include "box/sql_stmt_cache.h"
 
+#include <stdlib.h>
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
+
+static int CTID_STRUCT_SQL_PARSED_AST = 0;
+
+/*
+ * Remember the SQL string for a prepared statement.
+ * Looks same as sqlVdbeSetSql but for AST, not VDBE
+ */
+static void
+sql_ast_set_sql(struct sql_parsed_ast *ast, const char *ps, int sz)
+{
+	if (ast == NULL)
+		return;
+	assert(ast->sql_query == NULL);
+	ast->sql_query = sqlDbStrNDup(sql_get(), ps, sz);
+}
 
 int
 sql_stmt_parse(const char *zSql, sql_stmt **ppStmt, struct sql_parsed_ast *ast)
@@ -32,8 +49,7 @@ sql_stmt_parse(const char *zSql, sql_stmt **ppStmt, struct sql_parsed_ast *ast)
 	if (sParse.is_aborted)
 		rc = -1;
 
-	if (db->init.busy == 0) 
-		sqlVdbeSetSql(sParse.pVdbe, zSql, (int)(sParse.zTail - zSql));
+	assert(sParse.pVdbe == NULL); // FIXME
 	if (sParse.pVdbe != NULL && (rc != 0 || db->mallocFailed)) {
 		sqlVdbeFinalize(sParse.pVdbe);
 		assert(!(*ppStmt));
@@ -42,6 +58,8 @@ sql_stmt_parse(const char *zSql, sql_stmt **ppStmt, struct sql_parsed_ast *ast)
 	}
 	*ast = sParse.parsed_ast;
 	assert(ast->keep_ast == true);
+	//if (db->init.busy == 0)
+	sql_ast_set_sql(ast, zSql, (int)(sParse.zTail - zSql));
 
 #if 0 // FIXME
 	/* Delete any TriggerPrg structures allocated while parsing this statement. */
@@ -75,12 +93,12 @@ lbox_sqlparser_parse(struct lua_State *L)
 
 	uint32_t stmt_id = sql_stmt_calculate_id(sql, length);
 	struct sql_stmt *stmt = sql_stmt_cache_find(stmt_id);
-	struct sql_parsed_ast ast;
+	struct sql_parsed_ast *ast = sql_ast_alloc();
 
 	if (stmt == NULL) {
-		if (sql_stmt_parse(sql, &stmt, &ast) != 0)
+		if (sql_stmt_parse(sql, &stmt, ast) != 0)
 			return -1;
-		if (sql_stmt_cache_insert(stmt) != 0) {
+		if (sql_stmt_cache_insert(stmt, ast) != 0) {
 			sql_stmt_finalize(stmt);
 			goto error;
 		}
@@ -91,10 +109,14 @@ lbox_sqlparser_parse(struct lua_State *L)
 			//	goto error;
 		}
 	}
-	assert(stmt != NULL);
+	assert(ast != NULL);
 	/* Add id to the list of available statements in session. */
 	if (!session_check_stmt_id(current_session(), stmt_id))
 		session_add_stmt_id(current_session(), stmt_id);
+
+	struct sql_parsed_ast** ppast =
+		luaL_pushcdata(L, CTID_STRUCT_SQL_PARSED_AST);
+	*ppast = ast;
 
 	return 1;
 error:
@@ -135,6 +157,10 @@ lbox_sqlparser_deserialize(struct lua_State *L)
 void
 box_lua_sqlparser_init(struct lua_State *L)
 {
+	luaL_cdef(L, "struct sql_parsed_ast;");
+	CTID_STRUCT_SQL_PARSED_AST = luaL_ctypeid(L, "struct sql_parsed_ast&");
+	assert(CTID_STRUCT_SQL_PARSED_AST != 0);
+
 	static const struct luaL_Reg meta[] = {
 		{ "parse", lbox_sqlparser_parse },
 		{ "unparse", lbox_sqlparser_unparse },

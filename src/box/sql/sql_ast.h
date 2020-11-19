@@ -55,6 +55,7 @@ enum ast_type {
 };
 
 struct sql_parsed_ast {
+	const char* sql_query; 	/**< original query */
 	enum ast_type ast_type;	/**< Type of parsed_ast member. */
 	bool keep_ast;		/**< Keep AST after .parse */
 	union {
@@ -63,6 +64,13 @@ struct sql_parsed_ast {
 		struct sql_trigger *trigger;
 	};
 };
+
+struct sql_parsed_ast*
+sql_ast_alloc(void);
+
+void
+sql_ast_free(struct sql_parsed_ast *p);
+
 
 #if defined(__cplusplus)
 }
