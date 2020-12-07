@@ -50,28 +50,35 @@ sql_stmt_parse(const char *zSql, sql_stmt **ppStmt, struct sql_parsed_ast *ast)
 	if (sParse.is_aborted)
 		rc = -1;
 
-	assert(sParse.pVdbe == NULL); // FIXME
-	if (sParse.pVdbe != NULL && (rc != 0 || db->mallocFailed)) {
+	if (rc != 0 || db->mallocFailed) {
 		sqlVdbeFinalize(sParse.pVdbe);
 		assert(!(*ppStmt));
-	} else {
+		goto exit_cleanup;
+	}
+	// we have either AST or VDBE, but not both
+	assert(SQL_PARSE_VALID_VDBE(&sParse) != SQL_PARSE_VALID_AST(&sParse));
+	if (SQL_PARSE_VALID_VDBE(&sParse)) {
+		if (db->init.busy == 0) {
+			Vdbe *pVdbe = sParse.pVdbe;
+			sqlVdbeSetSql(pVdbe, zSql, (int)(sParse.zTail - zSql));
+		}
 		*ppStmt = (sql_stmt *) sParse.pVdbe;
-	}
-	*ast = sParse.parsed_ast;
-	assert(ast->keep_ast == true);
-	//if (db->init.busy == 0)
-	sql_ast_set_sql(ast, zSql, (int)(sParse.zTail - zSql));
 
-#if 0 // FIXME
-	/* Delete any TriggerPrg structures allocated while parsing this statement. */
-	while (sParse.pTriggerPrg) {
-		TriggerPrg *pT = sParse.pTriggerPrg;
-		sParse.pTriggerPrg = pT->pNext;
-		sqlDbFree(db, pT);
+		/* Delete any TriggerPrg structures allocated while parsing this statement. */
+		while (sParse.pTriggerPrg) {
+			TriggerPrg *pT = sParse.pTriggerPrg;
+			sParse.pTriggerPrg = pT->pNext;
+			sqlDbFree(db, pT);
+		}
+	} else {	// AST constructed
+		assert(SQL_PARSE_VALID_AST(&sParse));
+		*ast = sParse.parsed_ast;
+		assert(ast->keep_ast == true);
+		sql_ast_set_sql(ast, zSql, (int)(sParse.zTail - zSql));
 	}
-#endif
 
-	sql_parser_destroy(&sParse); // FIXME
+exit_cleanup:
+	sql_parser_destroy(&sParse);
 	return rc;
 }
 
@@ -98,7 +105,7 @@ lbox_sqlparser_parse(struct lua_State *L)
 
 	if (stmt == NULL) {
 		if (sql_stmt_parse(sql, &stmt, ast) != 0)
-			return -1;
+			goto error;
 		if (sql_stmt_cache_insert(stmt, ast) != 0) {
 			sql_stmt_finalize(stmt);
 			goto error;
@@ -153,8 +160,10 @@ sql_ast_generate_vdbe(struct lua_State *L, struct stmt_cache_entry *entry)
 {
 	(void)L;
 	struct sql_parsed_ast * ast = entry->ast;
-	if (entry->ast == NULL)	// there is no AST generation yet
-		return NULL;
+	// nothing to generate yet - this kind of statement is 
+	// not (yet) supported. Eventually will be removed.
+	if (!AST_VALID(entry->ast))
+		return entry->stmt;
 
 	// assumption is that we have not yet completed
 	// bytecode generation for parsed AST
