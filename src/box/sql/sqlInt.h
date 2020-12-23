@@ -1815,15 +1815,18 @@ struct SrcList {
 		int addrFillSub;	/* Address of subroutine to manifest a subquery */
 		int regReturn;	/* Register holding return address of addrFillSub */
 		int regResult;	/* Registers holding results of a co-routine */
-		struct {
-			u8 jointype;	/* Type of join between this table and the previous */
-			unsigned notIndexed:1;	/* True if there is a NOT INDEXED clause */
-			unsigned isIndexedBy:1;	/* True if there is an INDEXED BY clause */
-			unsigned isTabFunc:1;	/* True if table-valued-function syntax */
-			unsigned isCorrelated:1;	/* True if sub-query is correlated */
-			unsigned viaCoroutine:1;	/* Implemented as a co-routine */
-			unsigned isRecursive:1;	/* True for recursive reference in WITH */
-		} fg;
+		union {
+			struct {
+				u8 jointype;	/* Type of join between this table and the previous */
+				unsigned notIndexed:1;	/* True if there is a NOT INDEXED clause */
+				unsigned isIndexedBy:1;	/* True if there is an INDEXED BY clause */
+				unsigned isTabFunc:1;	/* True if table-valued-function syntax */
+				unsigned isCorrelated:1;	/* True if sub-query is correlated */
+				unsigned viaCoroutine:1;	/* Implemented as a co-routine */
+				unsigned isRecursive:1;	/* True for recursive reference in WITH */
+			} fg;
+			unsigned fgBits;
+		};
 		u8 iSelectId;	/* If pSelect!=0, the id of the sub-select in EQP */
 		int iCursor;	/* The VDBE cursor number used to access this table */
 		struct Expr *pOn;	/* The ON clause of a join */
