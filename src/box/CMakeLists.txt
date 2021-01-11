@@ -187,6 +187,7 @@ add_library(box STATIC
     sql_stmt_cache.c
     wal.c
     call.c
+    module_cache.c
     merger.c
     ibuf.c
     ${sql_sources}
