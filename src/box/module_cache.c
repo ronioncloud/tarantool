@@ -103,6 +103,22 @@ module_cache_add(struct module *module)
 }
 
 /**
+ * Update the module cache. Since the lookup is string
+ * key based it is safe to just update the value.
+ */
+static int
+module_cache_update(const char *name, const char *name_end,
+		    struct module *module)
+{
+	mh_int_t e = mh_strnptr_find_inp(mod_hash, name, name_end - name);
+	if (e == mh_end(mod_hash))
+		return -1;
+	mh_strnptr_node(mod_hash, e)->str = module->package;
+	mh_strnptr_node(mod_hash, e)->val = module;
+	return 0;
+}
+
+/**
  * Delete a module from the modules cache.
  */
 static void
@@ -475,9 +491,15 @@ module_reload(const char *package, const char *package_end,
 		rlist_move(&new->funcs_list, &mod_sym->item);
 	}
 
-	module_cache_del(package, package_end);
-	if (module_cache_add(new) != 0)
-		goto restore;
+	if (module_cache_update(package, package_end, new) != 0) {
+		/*
+		 * Module cache must be consistent at this moment,
+		 * we've looked up for the package recently. If
+		 * someone has updated the cache in unexpected way
+		 * the consistency is lost and we must not continue.
+		 */
+		panic("module: can't update module cache (%s)", package);
+	}
 
 	module_gc(old);
 	*module = new;
