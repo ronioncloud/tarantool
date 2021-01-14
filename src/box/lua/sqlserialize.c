@@ -438,16 +438,10 @@ lbox_sqlparser_serialize(struct lua_State *L)
 		sql_parser_create(&parser, parser.db, default_flags);
 		sqlparser_generate_msgpack_walker(&parser, &ibuf, ast->select);
 
-		lua_pushlstring(L, ibuf.rpos, ibuf_used(&ibuf));
+		lua_pushlstring(L, ibuf.buf, ibuf_used(&ibuf));
+		ibuf_reinit(&ibuf);
 	} else {
 		lua_pushnil(L);
 	}
-	return 1;
-}
-
-int
-lbox_sqlparser_deserialize(struct lua_State *L)
-{
-	lua_pushliteral(L, "sqlparser.deserialize");
 	return 1;
 }
