@@ -1712,9 +1712,15 @@ struct ExprList {
 		char *zName;	/* Token associated with this expression */
 		char *zSpan;	/* Original text of the expression */
 		enum sort_order sort_order;
-		unsigned done:1;	/* A flag to indicate when processing is finished */
-		unsigned bSpanIsTab:1;	/* zSpan holds DB.TABLE.COLUMN */
-		unsigned reusable:1;	/* Constant expression is reusable */
+		union {
+			unsigned bits;			/* aggregated bits for serialization */
+			struct {
+				unsigned done:1;	/* A flag to indicate when processing is finished */
+				unsigned bSpanIsTab:1;	/* zSpan holds DB.TABLE.COLUMN */
+				unsigned reusable:1;	/* Constant expression is reusable */
+
+			};
+		};
 		union {
 			struct {
 				u16 iOrderByCol;	/* For ORDER BY, column number in result set */

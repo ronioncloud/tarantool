@@ -29,7 +29,7 @@ struct OutputWalker {
 };
 
 static int
-sql_walk_select(struct Walker *, struct Select *, const char *);
+sql_walk_select(struct Walker *, struct Select *, const char *, bool);
 static int
 sql_walk_expr_list(struct Walker * base, struct ExprList * p, const char *title);
 static int
@@ -191,7 +191,7 @@ sql_walk_expr(struct Walker * base, struct Expr * expr, const char *title)
 		return WRC_Continue;
 	// cases 4. and 5.
 	if (ExprHasProperty(expr, EP_xIsSelect)) {
-		if (sql_walk_select(base, expr->x.pSelect, "subselect"))
+		if (sql_walk_select(base, expr->x.pSelect, "subselect", true))
 			return WRC_Continue;
 	} else if (expr->x.pList) {
 		if (sql_walk_expr_list(base, expr->x.pList, "inexpr"))
@@ -215,16 +215,49 @@ sql_walk_expr_list(struct Walker * base, struct ExprList * p, const char *title)
 	char * data = ibuf->wpos;
 	assert(title != NULL);
 	OUT_TITLE_(walker->ibuf, title);
-	struct ExprList_item *pItem;
+	struct ExprList_item *pItem = pItem = p->a;
 	int i;
 	int n_elems = p->nExpr;
 	OUT_ARRAY_N(ibuf, n_elems);
-	for (i = n_elems, pItem = p->a; i > 0; i--, pItem++) {
-		if (sql_walk_expr(base, pItem->pExpr, NULL))
+	for (i = n_elems; i > 0; i--, pItem++) {
+		OUT_MAP_N(ibuf, 6);
+		if (sql_walk_expr(base, pItem->pExpr, "subexpr"))
 			return WRC_Abort;
+		OUT_VS(ibuf, pItem, zName);
+		OUT_VS(ibuf, pItem, zSpan);
+		OUT_V(ibuf, pItem, sort_order, uint);
+		OUT_V(ibuf, pItem, bits, uint);
+		OUT_V(ibuf, pItem, u.iConstExprReg, Xint);
 	}
 	assert(n_elems == (p->nExpr - i));
 	return WRC_Continue;
+}
+
+static int
+sql_walk_select_idlist(struct Walker *base, struct IdList *p, const char *title)
+{
+	if (p == NULL)
+		return WRC_Continue;
+
+	struct OutputWalker * walker = (struct OutputWalker*)base;
+	struct ibuf * ibuf = walker->ibuf;
+	char * data = ibuf->wpos;
+	assert(title != NULL);
+	OUT_TITLE_(walker->ibuf, title);
+	struct IdList_item *pItem;
+	int i;
+	int n_elems = p->nId;
+	OUT_ARRAY_N(ibuf, n_elems);
+	for (i = n_elems, pItem = p->a; i > 0; i--, pItem++) {
+		OUT_MAP_N(ibuf, 2);
+
+		OUT_VS(ibuf, pItem, zName);
+		OUT_V(ibuf, pItem, idx, Xint);
+
+	}
+	assert(n_elems == (p->nId - i));
+	return WRC_Continue;
+
 }
 
 /*
@@ -237,7 +270,7 @@ static int
 sql_walk_select_expr(Walker * walker, Select * p, bool dryrun,
 		    const char *title)
 {
-	(void)title;
+	(void)title; // FIXME
 	int rc = 0;
 	if (dryrun != 0) {
 		rc += (p->pEList != NULL) + (p->pWhere != NULL) +
@@ -293,7 +326,9 @@ sql_walk_select_from(Walker * base, Select * p, bool dryrun, const char *title)
 	for (i = n_elems, pItem = pSrc->a; i > 0; i--, pItem++) {
 		size_t items = (pItem->pSelect != NULL) +
 				(pItem->fg.isTabFunc != 0 ||
-				pItem->fg.isIndexedBy != 0);
+				pItem->fg.isIndexedBy != 0) +
+				(pItem->pOn != NULL) +
+				(pItem->pUsing != NULL);
 		OUT_MAP_N(ibuf, 3 + items);
 		OUT_VS(ibuf, pItem, zName);
 		OUT_VS(ibuf, pItem, zAlias);
@@ -316,8 +351,13 @@ sql_walk_select_from(Walker * base, Select * p, bool dryrun, const char *title)
 		if (pItem->fg.isIndexedBy)
 			OUT_VS(ibuf, pItem, u1.zIndexedBy);
 
+		if (sql_walk_expr(base, pItem->pOn, "on"))
+			return WRC_Abort;
 
-		if (sql_walk_select(base, pItem->pSelect, "select"))
+		if (sql_walk_select_idlist(base, pItem->pUsing, "using"))
+			return WRC_Abort;
+
+		if (sql_walk_select(base, pItem->pSelect, "select", true))
 			return WRC_Abort;
 
 		if (pItem->fg.isTabFunc &&
@@ -346,7 +386,7 @@ sql_walk_select_from(Walker * base, Select * p, bool dryrun, const char *title)
  */
 static int
 sql_walk_select(struct Walker *base, struct Select * p,
-		const char *title)
+		const char *title, bool expected_keyvalue)
 {
 	if (p == NULL)
 		return WRC_Continue;
@@ -357,7 +397,10 @@ sql_walk_select(struct Walker *base, struct Select * p,
 	int rc = WRC_Continue;
 	base->walkerDepth++;
 
-	OUT_TUPLE_TITLE(walker->ibuf, title);
+	if (expected_keyvalue)
+		OUT_TITLE_(ibuf, title);
+	else
+		OUT_TUPLE_TITLE(walker->ibuf, title);
 
 	// count number of selects in chain
 	size_t n_selects = 0;
@@ -414,7 +457,7 @@ sqlparser_generate_msgpack_walker(struct Parse *parser,
 	};
 	//struct region *region = &fiber()->gc;
 
-	sql_walk_select(&wlkr.base, p, "select");
+	sql_walk_select(&wlkr.base, p, "select", false);
 
 }
 
@@ -435,7 +478,8 @@ lbox_sqlparser_serialize(struct lua_State *L)
 		ibuf_reset(&ibuf);
 
 		struct Parse parser;
-		sql_parser_create(&parser, parser.db, default_flags);
+		struct sql *db = sql_get();
+		sql_parser_create(&parser, db, default_flags);
 		sqlparser_generate_msgpack_walker(&parser, &ibuf, ast->select);
 
 		lua_pushlstring(L, ibuf.buf, ibuf_used(&ibuf));
