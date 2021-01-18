@@ -230,7 +230,7 @@ module_load(const char *package, const char *package_end)
 	memcpy(module->package, package, package_len);
 	module->package[package_len] = 0;
 	rlist_create(&module->funcs_list);
-	module->calls = 0;
+	module->refs = 0;
 
 	const char *tmpdir = getenv("TMPDIR");
 	if (tmpdir == NULL)
@@ -328,7 +328,7 @@ module_delete(struct module *module)
 static void
 module_gc(struct module *module)
 {
-	if (rlist_empty(&module->funcs_list) && module->calls == 0)
+	if (rlist_empty(&module->funcs_list) && module->refs == 0)
 		module_delete(module);
 }
 
@@ -442,9 +442,9 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
 	 */
 	struct module *module = mod_sym->module;
 	assert(module != NULL);
-	++module->calls;
+	++module->refs;
 	int rc = mod_sym->addr(&ctx, data, data + data_sz);
-	--module->calls;
+	--module->refs;
 	module_gc(module);
 	region_truncate(region, region_svp);
 

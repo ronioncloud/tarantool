@@ -41,9 +41,9 @@ struct module {
 	 */
 	struct rlist funcs_list;
 	/**
-	 * Count of active calls.
+	 * Count of active references to the module.
 	 */
-	size_t calls;
+	int64_t refs;
 	/**
 	 * Module's package name.
 	 */
