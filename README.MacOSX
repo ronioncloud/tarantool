@@ -24,7 +24,7 @@ brew install cmake readline icu4c openssl
 For MacPorts:
 port install autoconf binutils cmake ncurses zlib readline
 
-2. Install test-required packages and modules for Python 2.7
+2. Install test-required packages and modules for Python 3.x
 -------------
 
 You need: pyYAML, python-daemon, msgpack-python, gevent, six
