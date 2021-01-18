@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import os
 import sys
+import json
 
 def call(name, *args):
     return iproto.call(name, *args)
@@ -136,16 +137,69 @@ admin("space:drop()")
 admin("space = box.schema.space.create('tweedledum')")
 admin("index = space:create_index('primary', { type = 'tree' })")
 
+def args_to_str(args):
+    l = []
+    for a in list(args):
+        if isinstance(a, dict):
+            l.append(json.dumps(a, sort_keys=True))
+        else:
+            l.append(str(a))
+
+    return ",".join(l)
+
+def deep_convert_dict_to_list(obj):
+    ret = []
+    if isinstance(obj, dict):
+        for k, v in sorted(obj.items()):
+            if hasattr(v, '__getitem__'):
+                ret.append((k, deep_convert_dict_to_list(v)))
+            else:
+                ret.append((k, v))
+        return ret
+    if isinstance(obj, list):
+        for v in obj:
+            if hasattr(v, '__getitem__'):
+                ret.append(deep_convert_dict_to_list(v))
+            else:
+                ret.append(v)
+        return ret
+
+    return obj
+
+def response_repr(response_obj):
+    '''
+    Return string representation of the object.
+
+    :rtype: str or None
+    '''
+    if response_obj.return_code:
+        return json.dumps({
+            'error': {
+                'code': response_obj.strerror[0],
+                'reason': response_obj.return_message
+            }
+        }, sort_keys = True, indent = 4, separators=(', ', ': '))
+
+    output = []
+    for tpl in response_obj.data or ():
+        tpl = deep_convert_dict_to_list(tpl)
+        output.extend(("- ", repr(tpl), "\n"))
+    if len(output) > 0:
+        output.pop()
+
+    return ''.join(output)
 
 def lua_eval(name, *args):
-    print("eval ({})({})".format(name, ",".join([ str(arg) for arg in args])))
+    print("eval ({})({})".format(name, args_to_str(args)))
     print("---")
-    print(iproto.py_con.eval(name, args))
+    response = iproto.py_con.eval(name, args)
+    print(response_repr(response))
 
 def lua_call(name, *args):
-    print("call {}({})".format(name, ",".join([ str(arg) for arg in args])))
+    print("call {}({})".format(name, args_to_str(args)))
     print("---")
-    print(iproto.py_con.call(name, args))
+    response = iproto.py_con.call(name, args)
+    print(response_repr(response))
 
 def test(expr, *args):
     lua_eval("return " + expr, *args)
