@@ -87,8 +87,8 @@ deps_debian:
 		build-essential cmake coreutils sed \
 		libreadline-dev libncurses5-dev libyaml-dev libssl-dev \
 		libcurl4-openssl-dev libunwind-dev libicu-dev \
-		python python-pip python-setuptools python-dev \
-		python-msgpack python-yaml python-argparse python-six python-gevent \
+		python3 python3-pip python3-setuptools python3-dev \
+		python3-msgpack python3-yaml python-argparse python3-six python3-gevent \
 		lcov ruby clang llvm llvm-dev zlib1g-dev autoconf automake libtool
 
 deps_buster_clang_8: deps_debian
@@ -309,7 +309,7 @@ deps_osx:
 	# try to install the packages either upgrade it to avoid of fails
 	# if the package already exists with the previous version
 	brew install --force ${OSX_PKGS} || brew upgrade ${OSX_PKGS}
-	pip install --force-reinstall -r test-run/requirements.txt
+	pip3 install --force-reinstall -r test-run/requirements.txt
 
 deps_osx_github_actions:
 	# try to install the packages either upgrade it to avoid of fails
@@ -357,7 +357,7 @@ base_deps_osx:
 	brew update || echo | /usr/bin/ruby -e \
 		"$$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
 	brew install --force ${STATIC_OSX_PKGS} || brew upgrade ${STATIC_OSX_PKGS}
-	pip install --force-reinstall -r test-run/requirements.txt
+	pip3 install --force-reinstall -r test-run/requirements.txt
 
 base_deps_osx_github_actions:
 	# try to install the packages either upgrade it to avoid of fails
@@ -386,14 +386,15 @@ test_static_build_cmake_osx_github_actions: base_deps_osx_github_actions test_st
 
 deps_freebsd:
 	sudo pkg install -y git cmake gmake icu libiconv \
-		python27 py27-yaml py27-six py27-gevent
+		python37 py37-yaml py37-six py37-gevent \
+		autoconf automake libtool
 
 build_freebsd:
 	cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_WERROR=ON ${CMAKE_EXTRA_PARAMS}
 	gmake -j
 
 test_freebsd_no_deps: build_freebsd
-	cd test && python2.7 test-run.py --force $(TEST_RUN_EXTRA_PARAMS)
+	cd test && python test-run.py --force $(TEST_RUN_EXTRA_PARAMS)
 
 test_freebsd: deps_freebsd test_freebsd_no_deps
 
