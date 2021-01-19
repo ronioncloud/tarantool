@@ -80,6 +80,3 @@ endif()
 add_subdirectory(unit)
 add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/luajit/test
                  ${PROJECT_BINARY_DIR}/third_party/luajit/test)
-
-# Disable connector_c for 1.6
-#add_subdirectory(connector_c)
