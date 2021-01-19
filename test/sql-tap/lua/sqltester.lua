@@ -86,7 +86,7 @@ local function is_deeply_regex(got, expected)
     end
 
     if string_regex_p(expected) then
-        return table_match_regex_p(got, expected)
+        return table_match_regex_p(got, expected) -- luacheck: ignore table_match_regex_p
     end
 
     if got == nil and expected == nil then return true end

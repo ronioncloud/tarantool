@@ -1556,6 +1556,7 @@ test:do_test(
         return box.execute("SELECT * FROM test1 WHERE f1<0").metadata
     end, {
         -- <select1-9.2>
+        -- luacheck: ignore F1 and F2 and INTEGER
         {name = F1, type = INTEGER},{name = F2, type = INTEGER}
         -- </select1-9.2>
     })
@@ -1566,6 +1567,7 @@ test:do_test(
             return box.execute("SELECT * FROM test1 WHERE f1<(select count(*) from test2)").metadata
         end, {
             -- <select1-9.3>
+            -- luacheck: ignore F1 and F2 and INTEGER
             {name = F1, type = INTEGER},{name = F2, type = INTEGER}
             -- </select1-9.3>
         })
@@ -1578,6 +1580,7 @@ test:do_test(
         return box.execute("SELECT * FROM test1 ORDER BY f1").metadata
     end, {
         -- <select1-9.4>
+        -- luacheck: ignore F1 and F2 and INTEGER
         {name = F1, type = INTEGER},{name = F2, type = INTEGER}
         -- </select1-9.4>
     })
@@ -1588,6 +1591,7 @@ test:do_test(
         return box.execute("SELECT * FROM test1 WHERE f1<0 ORDER BY f1").metadata
     end, {
         -- <select1-9.5>
+        -- luacheck: ignore F1 and F2 and INTEGER
         {name = F1, type = INTEGER},{name = F2, type = INTEGER}
         -- </select1-9.5>
     })

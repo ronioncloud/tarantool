@@ -26,6 +26,8 @@ local function eqp(sql)
     return test:execsql("EXPLAIN QUERY PLAN"..sql)
 end
 
+local X = nil
+
 local function alpha(blob)
     local ret = ""
     for _, c in ipairs(X(37, "X!cmd", [=[["split",["blob"],""]]=])) do
@@ -155,6 +157,9 @@ test:do_test(
 
 -- Verify that range queries generate the correct row count estimates
 --
+local t1x = nil
+local t1y = nil
+local t1z = nil
 for i, v in pairs({
 {'z>=0 AND z<=0',      t1z,  400},
 {'z>=1 AND z<=1',      t1z,  300},

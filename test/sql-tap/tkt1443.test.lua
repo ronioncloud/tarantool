@@ -115,7 +115,7 @@ test:do_test(
             );
             INSERT INTO Permissions VALUES(1, 0, 0, 1, 0, 1);
             INSERT INTO Permissions VALUES(2, 2, 4, 0, 0, 0);
-        ]], d))
+        ]], d)) -- luacheck: ignore d
     end, {
         -- <tkt1443-1.0>
 

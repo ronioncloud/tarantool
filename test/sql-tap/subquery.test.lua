@@ -684,7 +684,7 @@ test:do_test(
         -- This is the key test.  The subquery should have only run once.  If
         -- The double-quoted identifier "two" were causing the subquery to be
         -- processed as a correlated subquery, then it would have run 4 times.
-        return callcnt
+        return callcnt -- luacheck: ignore callcnt
     end, 1)
 
 -- Ticket #1380.  Make sure correlated subqueries on an IN clause work
@@ -706,7 +706,8 @@ test:do_test(
 test:do_test(
     "subquery-6.2",
     function()
-        return callcnt
+        return callcnt -- luacheck: ignore callcnt
+
     end, 4)
 
 test:do_test(
@@ -725,7 +726,7 @@ test:do_test(
 test:do_test(
     "subquery-6.4",
     function()
-        return callcnt
+        return callcnt -- luacheck: ignore callcnt
     end, 1)
 
 box.func.CALLCNT:drop()
