@@ -2143,7 +2143,7 @@ test:do_execsql_test(
 local likeargs = {}
 local function likefunc(...)
     local args = {...}
-    for i, v in ipairs(args) do
+    for _, v in ipairs(args) do
         table.insert(likeargs, v)
     end
     return 1
@@ -2373,7 +2373,7 @@ end
 local regexpargs = {}
 local function regexpfunc(...)
     local args = {...}
-    for i, v in ipairs(args) do
+    for _, v in ipairs(args) do
         table.insert(regexpargs, v)
     end
     return 1
@@ -2432,7 +2432,7 @@ test:do_test(
 local matchargs = {  }
 local function matchfunc(...)
     local args = {...}
-    for i, v in ipairs(args) do
+    for _, v in ipairs(args) do
         table.insert(matchargs, v)
     end
     return 1
