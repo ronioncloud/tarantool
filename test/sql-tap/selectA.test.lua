@@ -76,9 +76,6 @@ test:do_execsql_test(
     })
 
 -- MUST_WORK_TEST
-if (0 > 0)
- then
-end
 test:do_execsql_test(
     "selectA-2.1",
     [[
@@ -2353,11 +2350,6 @@ test:do_execsql_test(
 -- At one point the following code exposed a temp register reuse problem.
 --
 -- MUST_WORK_TEST
--- TODO stored procedures are not supported by now
-if (0 > 0)
- then
-end
-
 -- TODO stored procedures are not supported by now
 --db("func", "f", "f")
 test:do_execsql_test(
