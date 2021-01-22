@@ -60,7 +60,7 @@ txn_limbo_last_synchro_entry(struct txn_limbo *limbo)
 {
 	struct txn_limbo_entry *entry;
 	rlist_foreach_entry_reverse(entry, &limbo->queue, in_queue) {
-		if (txn_has_flag(entry->txn, TXN_WAIT_ACK))
+		if (entry->txn->flags & TXN_WAIT_ACK)
 			return entry;
 	}
 	return NULL;
@@ -69,7 +69,7 @@ txn_limbo_last_synchro_entry(struct txn_limbo *limbo)
 struct txn_limbo_entry *
 txn_limbo_append(struct txn_limbo *limbo, uint32_t id, struct txn *txn)
 {
-	assert(txn_has_flag(txn, TXN_WAIT_SYNC));
+	assert(txn->flags & TXN_WAIT_SYNC);
 	assert(limbo == &txn_limbo);
 	/*
 	 * Transactions should be added to the limbo before WAL write. Limbo
@@ -168,7 +168,7 @@ txn_limbo_assign_remote_lsn(struct txn_limbo *limbo,
 	assert(limbo->owner_id != instance_id);
 	assert(entry->lsn == -1);
 	assert(lsn > 0);
-	assert(txn_has_flag(entry->txn, TXN_WAIT_ACK));
+	assert(entry->txn->flags & TXN_WAIT_ACK);
 	(void) limbo;
 	entry->lsn = lsn;
 }
@@ -181,7 +181,7 @@ txn_limbo_assign_local_lsn(struct txn_limbo *limbo,
 	assert(limbo->owner_id == instance_id);
 	assert(entry->lsn == -1);
 	assert(lsn > 0);
-	assert(txn_has_flag(entry->txn, TXN_WAIT_ACK));
+	assert(entry->txn->flags & TXN_WAIT_ACK);
 
 	entry->lsn = lsn;
 	/*
@@ -215,14 +215,14 @@ txn_limbo_write_rollback(struct txn_limbo *limbo, int64_t lsn);
 int
 txn_limbo_wait_complete(struct txn_limbo *limbo, struct txn_limbo_entry *entry)
 {
-	assert(entry->lsn > 0 || !txn_has_flag(entry->txn, TXN_WAIT_ACK));
+	assert(entry->lsn > 0 || (entry->txn->flags & TXN_WAIT_ACK) == 0);
 	bool cancellable = fiber_set_cancellable(false);
 
 	if (txn_limbo_entry_is_complete(entry))
 		goto complete;
 
-	assert(!txn_has_flag(entry->txn, TXN_IS_DONE));
-	assert(txn_has_flag(entry->txn, TXN_WAIT_SYNC));
+	assert((entry->txn->flags & TXN_IS_DONE) == 0);
+	assert(entry->txn->flags & TXN_WAIT_SYNC);
 	double start_time = fiber_clock();
 	while (true) {
 		double deadline = start_time + replication_synchro_timeout;
@@ -266,8 +266,7 @@ txn_limbo_wait_complete(struct txn_limbo *limbo, struct txn_limbo_entry *entry)
 					 in_queue, tmp) {
 		e->txn->signature = TXN_SIGNATURE_QUORUM_TIMEOUT;
 		txn_limbo_abort(limbo, e);
-		txn_clear_flag(e->txn, TXN_WAIT_SYNC);
-		txn_clear_flag(e->txn, TXN_WAIT_ACK);
+		e->txn->flags &= ~(TXN_WAIT_SYNC | TXN_WAIT_ACK);
 		txn_complete_fail(e->txn);
 		if (e == entry)
 			break;
@@ -289,7 +288,7 @@ complete:
 	 * installed the commit/rollback flag.
 	 */
 	assert(rlist_empty(&entry->in_queue));
-	assert(txn_has_flag(entry->txn, TXN_IS_DONE));
+	assert(entry->txn->flags & TXN_IS_DONE);
 	fiber_set_cancellable(cancellable);
 	/*
 	 * The first tx to be rolled back already performed all
@@ -385,7 +384,7 @@ txn_limbo_read_confirm(struct txn_limbo *limbo, int64_t lsn)
 		 * it is last, it does not depend on a not finished sync
 		 * transaction anymore and can be confirmed right away.
 		 */
-		if (txn_has_flag(e->txn, TXN_WAIT_ACK)) {
+		if (e->txn->flags & TXN_WAIT_ACK) {
 			/* Sync transaction not covered by the confirmation. */
 			if (e->lsn > lsn)
 				break;
@@ -399,8 +398,7 @@ txn_limbo_read_confirm(struct txn_limbo *limbo, int64_t lsn)
 		}
 		e->is_commit = true;
 		txn_limbo_remove(limbo, e);
-		txn_clear_flag(e->txn, TXN_WAIT_SYNC);
-		txn_clear_flag(e->txn, TXN_WAIT_ACK);
+		e->txn->flags &= ~(TXN_WAIT_SYNC | TXN_WAIT_ACK);
 		/*
 		 * If already written to WAL by now, finish tx processing.
 		 * Otherwise just clear the sync flags. Tx procesing will finish
@@ -446,7 +444,7 @@ txn_limbo_read_rollback(struct txn_limbo *limbo, int64_t lsn)
 	struct txn_limbo_entry *e, *tmp;
 	struct txn_limbo_entry *last_rollback = NULL;
 	rlist_foreach_entry_reverse(e, &limbo->queue, in_queue) {
-		if (!txn_has_flag(e->txn, TXN_WAIT_ACK))
+		if ((e->txn->flags & TXN_WAIT_ACK) == 0)
 			continue;
 		if (e->lsn < lsn)
 			break;
@@ -456,8 +454,7 @@ txn_limbo_read_rollback(struct txn_limbo *limbo, int64_t lsn)
 		return;
 	rlist_foreach_entry_safe_reverse(e, &limbo->queue, in_queue, tmp) {
 		txn_limbo_abort(limbo, e);
-		txn_clear_flag(e->txn, TXN_WAIT_SYNC);
-		txn_clear_flag(e->txn, TXN_WAIT_ACK);
+		e->txn->flags &= ~(TXN_WAIT_SYNC | TXN_WAIT_ACK);
 		if (e->txn->signature >= 0) {
 			/* Rollback the transaction. */
 			e->txn->signature = TXN_SIGNATURE_SYNC_ROLLBACK;
@@ -530,7 +527,7 @@ txn_limbo_ack(struct txn_limbo *limbo, uint32_t replica_id, int64_t lsn)
 		 * transactions are automatically committed right
 		 * after all the previous sync transactions are.
 		 */
-		if (!txn_has_flag(e->txn, TXN_WAIT_ACK)) {
+		if ((e->txn->flags & TXN_WAIT_ACK) == 0) {
 			assert(e->lsn == -1);
 			if (confirm_lsn == -1)
 				continue;
@@ -664,7 +661,7 @@ txn_limbo_force_empty(struct txn_limbo *limbo, int64_t confirm_lsn)
 	struct txn_limbo_entry *e, *last_quorum = NULL;
 	struct txn_limbo_entry *rollback = NULL;
 	rlist_foreach_entry(e, &limbo->queue, in_queue) {
-		if (txn_has_flag(e->txn, TXN_WAIT_ACK)) {
+		if (e->txn->flags & TXN_WAIT_ACK) {
 			if (e->lsn <= confirm_lsn) {
 				last_quorum = e;
 			} else {
@@ -693,7 +690,7 @@ txn_limbo_on_parameters_change(struct txn_limbo *limbo)
 	int64_t confirm_lsn = -1;
 	rlist_foreach_entry(e, &limbo->queue, in_queue) {
 		assert(e->ack_count <= VCLOCK_MAX);
-		if (!txn_has_flag(e->txn, TXN_WAIT_ACK)) {
+		if ((e->txn->flags & TXN_WAIT_ACK) == 0) {
 			assert(e->lsn == -1);
 			if (confirm_lsn == -1)
 				continue;

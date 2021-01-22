@@ -282,7 +282,7 @@ txn_begin(void)
 	 * It's a responsibility of an engine to disable yields
 	 * if they are not supported.
 	 */
-	txn_set_flag(txn, TXN_CAN_YIELD);
+	txn->flags |= TXN_CAN_YIELD;
 	return txn;
 }
 
@@ -516,7 +516,7 @@ txn_free_or_wakeup(struct txn *txn)
 	if (txn->fiber == NULL)
 		txn_free(txn);
 	else {
-		txn_set_flag(txn, TXN_IS_DONE);
+		txn->flags |= TXN_IS_DONE;
 		if (txn->fiber != fiber())
 			/* Wake a waiting fiber up. */
 			fiber_wakeup(txn->fiber);
@@ -526,7 +526,7 @@ txn_free_or_wakeup(struct txn *txn)
 void
 txn_complete_fail(struct txn *txn)
 {
-	assert(!txn_has_flag(txn, TXN_IS_DONE));
+	assert((txn->flags & TXN_IS_DONE) == 0);
 	assert(txn->signature < 0);
 	txn->status = TXN_ABORTED;
 	struct txn_stmt *stmt;
@@ -535,7 +535,7 @@ txn_complete_fail(struct txn *txn)
 		txn_rollback_one_stmt(txn, stmt);
 	if (txn->engine != NULL)
 		engine_rollback(txn->engine, txn);
-	if (txn_has_flag(txn, TXN_HAS_TRIGGERS))
+	if (txn->flags & TXN_HAS_TRIGGERS)
 		txn_run_rollback_triggers(txn, &txn->on_rollback);
 	txn_free_or_wakeup(txn);
 }
@@ -543,13 +543,12 @@ txn_complete_fail(struct txn *txn)
 void
 txn_complete_success(struct txn *txn)
 {
-	assert(!txn_has_flag(txn, TXN_IS_DONE));
-	assert(!txn_has_flag(txn, TXN_WAIT_SYNC));
+	assert((txn->flags & (TXN_IS_DONE | TXN_WAIT_SYNC)) == 0);
 	assert(txn->signature >= 0);
 	txn->status = TXN_COMMITTED;
 	if (txn->engine != NULL)
 		engine_commit(txn->engine, txn);
-	if (txn_has_flag(txn, TXN_HAS_TRIGGERS))
+	if (txn->flags & TXN_HAS_TRIGGERS)
 		txn_run_commit_triggers(txn, &txn->on_commit);
 	txn_free_or_wakeup(txn);
 }
@@ -587,9 +586,9 @@ txn_on_journal_write(struct journal_entry *entry)
 				     "%.3f sec", n_rows,
 				     txn->signature - n_rows + 1, delta);
 	}
-	if (txn_has_flag(txn, TXN_HAS_TRIGGERS))
+	if (txn->flags & TXN_HAS_TRIGGERS)
 		txn_run_wal_write_triggers(txn);
-	if (!txn_has_flag(txn, TXN_WAIT_SYNC))
+	if ((txn->flags & TXN_WAIT_SYNC) == 0)
 		txn_complete_success(txn);
 	else if (txn->fiber != NULL && txn->fiber != fiber())
 		fiber_wakeup(txn->fiber);
@@ -640,10 +639,9 @@ txn_journal_entry_new(struct txn *txn)
 	 * space can't be synchronous. So if there is at least one
 	 * synchronous space, the transaction is not local.
 	 */
-	if (!txn_has_flag(txn, TXN_FORCE_ASYNC)) {
+	if ((txn->flags & TXN_FORCE_ASYNC) == 0) {
 		if (is_sync) {
-			txn_set_flag(txn, TXN_WAIT_SYNC);
-			txn_set_flag(txn, TXN_WAIT_ACK);
+			txn->flags |= TXN_WAIT_SYNC | TXN_WAIT_ACK;
 		} else if (!txn_limbo_is_empty(&txn_limbo)) {
 			/*
 			 * There some sync entries on the
@@ -652,7 +650,7 @@ txn_journal_entry_new(struct txn *txn)
 			 * doesn't touch sync space (each sync txn
 			 * should be considered as a barrier).
 			 */
-			txn_set_flag(txn, TXN_WAIT_SYNC);
+			txn->flags |= TXN_WAIT_SYNC;
 		}
 	}
 
@@ -693,8 +691,8 @@ txn_prepare(struct txn *txn)
 {
 	txn->psn = ++txn_last_psn;
 
-	if (txn_has_flag(txn, TXN_IS_ABORTED_BY_YIELD)) {
-		assert(!txn_has_flag(txn, TXN_CAN_YIELD));
+	if (txn->flags & TXN_IS_ABORTED_BY_YIELD) {
+		assert((txn->flags & TXN_CAN_YIELD) == 0);
 		diag_set(ClientError, ER_TRANSACTION_YIELD);
 		diag_log();
 		return -1;
@@ -748,7 +746,7 @@ txn_prepare(struct txn *txn)
 	assert(rlist_empty(&txn->conflicted_by_list));
 
 	trigger_clear(&txn->fiber_on_stop);
-	if (!txn_has_flag(txn, TXN_CAN_YIELD))
+	if ((txn->flags & TXN_CAN_YIELD) == 0)
 		trigger_clear(&txn->fiber_on_yield);
 
 	txn->start_tm = ev_monotonic_now(loop());
@@ -815,7 +813,7 @@ txn_commit_async(struct txn *txn)
 	if (req == NULL)
 		goto rollback;
 
-	bool is_sync = txn_has_flag(txn, TXN_WAIT_SYNC);
+	bool is_sync = txn->flags & TXN_WAIT_SYNC;
 	struct txn_limbo_entry *limbo_entry;
 	if (is_sync) {
 		/*
@@ -838,7 +836,7 @@ txn_commit_async(struct txn *txn)
 		if (limbo_entry == NULL)
 			goto rollback;
 
-		if (txn_has_flag(txn, TXN_WAIT_ACK)) {
+		if (txn->flags & TXN_WAIT_ACK) {
 			int64_t lsn = req->rows[txn->n_applier_rows - 1]->lsn;
 			/*
 			 * Can't tell whether it is local or not -
@@ -895,7 +893,7 @@ txn_commit(struct txn *txn)
 	if (req == NULL)
 		goto rollback;
 
-	bool is_sync = txn_has_flag(txn, TXN_WAIT_SYNC);
+	bool is_sync = txn->flags & TXN_WAIT_SYNC;
 	if (is_sync) {
 		/*
 		 * Remote rows, if any, come before local rows, so
@@ -922,7 +920,7 @@ txn_commit(struct txn *txn)
 		goto rollback;
 	}
 	if (is_sync) {
-		if (txn_has_flag(txn, TXN_WAIT_ACK)) {
+		if (txn->flags & TXN_WAIT_ACK) {
 			int64_t lsn = req->rows[req->n_rows - 1]->lsn;
 			/*
 			 * Use local LSN assignment. Because
@@ -937,7 +935,7 @@ txn_commit(struct txn *txn)
 		if (txn_limbo_wait_complete(&txn_limbo, limbo_entry) < 0)
 			goto rollback;
 	}
-	assert(txn_has_flag(txn, TXN_IS_DONE));
+	assert(txn->flags & TXN_IS_DONE);
 	assert(txn->signature >= 0);
 
 	/* Synchronous transactions are freed by the calling fiber. */
@@ -946,7 +944,7 @@ txn_commit(struct txn *txn)
 
 rollback:
 	assert(txn->fiber != NULL);
-	if (!txn_has_flag(txn, TXN_IS_DONE)) {
+	if ((txn->flags & TXN_IS_DONE) == 0) {
 		fiber_set_txn(fiber(), txn);
 		txn_rollback(txn);
 	} else {
@@ -971,7 +969,7 @@ txn_rollback(struct txn *txn)
 	assert(txn == in_txn());
 	txn->status = TXN_ABORTED;
 	trigger_clear(&txn->fiber_on_stop);
-	if (!txn_has_flag(txn, TXN_CAN_YIELD))
+	if ((txn->flags & TXN_CAN_YIELD) == 0)
 		trigger_clear(&txn->fiber_on_yield);
 	txn->signature = TXN_SIGNATURE_ROLLBACK;
 	txn_complete_fail(txn);
@@ -992,12 +990,12 @@ bool
 txn_can_yield(struct txn *txn, bool set)
 {
 	assert(txn == in_txn());
-	bool could = txn_has_flag(txn, TXN_CAN_YIELD);
+	bool could = txn->flags & TXN_CAN_YIELD;
 	if (set && !could) {
-		txn_set_flag(txn, TXN_CAN_YIELD);
+		txn->flags |= TXN_CAN_YIELD;
 		trigger_clear(&txn->fiber_on_yield);
 	} else if (!set && could) {
-		txn_clear_flag(txn, TXN_CAN_YIELD);
+		txn->flags &= ~TXN_CAN_YIELD;
 		trigger_create(&txn->fiber_on_yield, txn_on_yield, NULL, NULL);
 		trigger_add(&fiber()->on_yield, &txn->fiber_on_yield);
 	}
@@ -1227,8 +1225,8 @@ txn_on_yield(struct trigger *trigger, void *event)
 	(void) event;
 	struct txn *txn = in_txn();
 	assert(txn != NULL);
-	assert(!txn_has_flag(txn, TXN_CAN_YIELD));
+	assert((txn->flags & TXN_CAN_YIELD) == 0);
 	txn_rollback_to_svp(txn, NULL);
-	txn_set_flag(txn, TXN_IS_ABORTED_BY_YIELD);
+	txn->flags |= TXN_IS_ABORTED_BY_YIELD;
 	return 0;
 }
