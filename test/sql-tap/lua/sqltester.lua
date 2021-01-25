@@ -2,6 +2,9 @@ local tap = require('tap')
 local json = require('json')
 local test = tap.test("errno")
 local sql_tokenizer = require('sql_tokenizer')
+--local ffi = require('ffi')
+--ffi.cdef [[ char * mp_str(char *); ]]
+
 
 -- pcall here, because we allow to run a test w/o test-run; use:
 -- LUA_PATH='test/sql-tap/lua/?.lua;test/sql/lua/?.lua;;' \
@@ -9,19 +12,47 @@ local sql_tokenizer = require('sql_tokenizer')
 local ok, test_run = pcall(require, 'test_run')
 test_run = ok and test_run.new() or nil
 
-local use_ast = false
+local cfg_sqlparser = test_run and test_run:get_cfg('sqlparser') or 'box_execute'
+test.sqlparser = cfg_sqlparser
+
 local _, sqlparser = pcall(require, 'sqlparser')
 
-local execute = use_ast and
-        function(query) -- parse via sqlparser.parse
-            local handle, error = sqlparser.parse(query)
-            if handle == nil then return nil, error end
-            return sqlparser.execute(handle)
+local handlers = {
+    -- parse via box.execute
+    box_execute = function(query)
+        return box.execute(query)
+    end,
+
+    -- parse via sqlparser.parse
+    ast_parse = function(query)
+        print (query)
+        local handle, error = sqlparser.parse(query)
+        if handle == nil then return nil, error end
+        return sqlparser.execute(handle)
+    end,
+
+    -- parse via sqlparser.parse and sqparser.serialize
+    ast_serialize = function(query)
+        print (query)
+        local handle, error = sqlparser.parse(query)
+        if handle == nil then return nil, error end
+
+        local mp = sqlparser.serialize(handle)
+        if mp ~= nil then
+            -- print(ffi.string(ffi.C.mp_str(ffi.cast("char*", mp))))
+            handle = sqlparser.deserialize(mp)
         end
-    or
-        function(query) -- parse via box.execute
-            return box.execute(query)
+        --[[local mpcheck = sqlparser.serialize(handle)
+        if mp ~= mpcheck then
+            print("mismatch: ",
+                ffi.string(ffi.C.mp_str(ffi.cast("char*", mp))),
+                ffi.string(ffi.C.mp_str(ffi.cast("char*", mpcheck))))
         end
+        --]]
+        return sqlparser.execute(handle)
+    end
+}
+local execute = handlers[cfg_sqlparser]
 
 local function flatten(arr)
     local result = { }
