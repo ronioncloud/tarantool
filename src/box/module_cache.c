@@ -418,6 +418,18 @@ int
 module_sym_call(struct module_sym *mod_sym, struct port *args,
 		struct port *ret)
 {
+	/*
+	 * The functions created with `box.schema.func`
+	 * help are not resolved immediately. Instead
+	 * they are deferred until first call. And when
+	 * call happens the we try to load a module and
+	 * resolve a symbol (which of course can fail if
+	 * there is no such module at all).
+	 *
+	 * While this is very weird (and frankly speaking
+	 * very bad design) we can't change it for backward
+	 * compatibility sake!
+	 */
 	if (mod_sym->addr == NULL) {
 		if (module_sym_load(mod_sym) != 0)
 			return -1;
