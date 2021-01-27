@@ -473,14 +473,12 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
 }
 
 int
-module_reload(const char *package, const char *package_end,
-	      struct module **module)
+module_reload(const char *package, const char *package_end)
 {
 	struct module *old = module_cache_find(package, package_end);
 	if (old == NULL) {
-		/* Module wasn't loaded - do nothing. */
-		*module = NULL;
-		return 0;
+		diag_set(ClientError, ER_NO_SUCH_MODULE, package);
+		return -1;
 	}
 
 	struct module *new = module_load(package, package_end);
@@ -514,7 +512,6 @@ module_reload(const char *package, const char *package_end,
 	}
 
 	module_gc(old);
-	*module = new;
 	return 0;
 
 restore:

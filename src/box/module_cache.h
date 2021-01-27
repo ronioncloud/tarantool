@@ -112,13 +112,11 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
  *
  * @param package shared library path start.
  * @param package_end shared library path end.
- * @param[out] module pointer to the reloaded module.
  *
  * @return 0 on succes, -1 otherwise, diag is set.
  */
 int
-module_reload(const char *package, const char *package_end,
-	      struct module **module);
+module_reload(const char *package, const char *package_end);
 
 /**
  * Initialize modules subsystem.
