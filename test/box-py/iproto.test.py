@@ -45,12 +45,31 @@ for (k,v) in list(globals().items()):
             not k.startswith("IPROTO_SQL_INFO_") and type(v) == int:
         key_names[v] = k
 
+def deep_convert_dict_to_list(obj):
+    ret = []
+    if isinstance(obj, dict):
+        for k, v in sorted(obj.items()):
+            if hasattr(v, '__getitem__'):
+                ret.append((k, deep_convert_dict_to_list(v)))
+            else:
+                ret.append((k, v))
+        return ret
+    if isinstance(obj, list):
+        for v in obj:
+            if hasattr(v, '__getitem__'):
+                ret.append(deep_convert_dict_to_list(v))
+            else:
+                ret.append(v)
+        return ret
+
+    return obj
+
 def repr_dict(todump):
     d = {}
     for (k, v) in todump.items():
         k_name = key_names.get(k, k)
         d[k_name] = v
-    return repr(d)
+    return repr(deep_convert_dict_to_list(d))
 
 def test(header, body):
     # Connect and authenticate
