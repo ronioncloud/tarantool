@@ -132,7 +132,7 @@ configure_debian:
 build_debian: configure_debian
 	make -j
 
-test_debian_no_deps: build_debian deps_debian
+test_debian_no_deps: build_debian
 	cd test && ./test-run.py --force $(TEST_RUN_EXTRA_PARAMS)
 
 test_debian: deps_debian test_debian_no_deps
@@ -145,7 +145,7 @@ build_coverage_debian:
 	cmake . -DCMAKE_BUILD_TYPE=Debug -DENABLE_GCOV=ON
 	make -j
 
-test_coverage_debian_no_deps: build_coverage_debian deps_debian
+test_coverage_debian_no_deps: build_coverage_debian
 	# Enable --long tests for coverage
 	cd test && ./test-run.py --force $(TEST_RUN_EXTRA_PARAMS) --long
 	lcov --compat-libtool --directory src/ --capture --output-file coverage.info.tmp \
@@ -163,7 +163,7 @@ test_coverage_debian_no_deps: build_coverage_debian deps_debian
 			--repo-token $(COVERALLS_TOKEN) coverage.info; \
 	fi;
 
-coverage_debian: test_coverage_debian_no_deps
+coverage_debian: deps_debian test_coverage_debian_no_deps
 
 # Coverity
 
@@ -203,7 +203,7 @@ build_asan_debian:
 		-DENABLE_FUZZER=ON ${CMAKE_EXTRA_PARAMS}
 	make -j
 
-test_asan_debian_no_deps: build_asan_debian deps_debian
+test_asan_debian_no_deps: build_asan_debian
 	# Temporary excluded some tests by issue #4360:
 	#  - To exclude tests from ASAN checks the asan/asan.supp file
 	#    was set at the build time in cmake/profile.cmake file.
@@ -294,13 +294,26 @@ test_oos_build:
 # OSX #
 #######
 
-OSX_PKGS=openssl readline curl icu4c libiconv zlib autoconf automake libtool cmake python3
+OSX_PKGS=openssl readline curl icu4c libiconv zlib cmake python3
 
 deps_osx:
+	# install brew using command from Homebrew repository instructions:
+	#   https://github.com/Homebrew/install
+	# NOTE: 'echo' command below is required since brew installation
+	# script obliges the one to enter a newline for confirming the
+	# installation via Ruby script.
+	brew update || echo | /usr/bin/ruby -e \
+		"$$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
 	# try to install the packages either upgrade it to avoid of fails
 	# if the package already exists with the previous version
 	brew install --force ${OSX_PKGS} || brew upgrade ${OSX_PKGS}
 	pip3 install --user --force-reinstall -r test-run/requirements.txt
+
+deps_osx_github_actions:
+	# try to install the packages either upgrade it to avoid of fails
+	# if the package already exists with the previous version
+	brew install --force ${OSX_PKGS_MIN} || brew upgrade ${OSX_PKGS_MIN}
+	pip3 install --force-reinstall -r test-run/requirements.txt
 
 build_osx:
 	cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_WERROR=ON ${CMAKE_EXTRA_PARAMS}
@@ -330,9 +343,9 @@ test_osx_no_deps: build_osx
 	${INIT_TEST_ENV_OSX}; \
 	cd test && ./test-run.py --vardir ${OSX_VARDIR} --force $(TEST_RUN_EXTRA_PARAMS)
 
-test_osx: test_osx_no_deps
+test_osx: deps_osx test_osx_no_deps
 
-test_osx_github_actions: deps_osx test_osx_no_deps
+test_osx_github_actions: deps_osx_github_actions test_osx_no_deps
 
 # Static macOS build
 
@@ -347,7 +360,7 @@ base_deps_osx_github_actions:
 	# try to install the packages either upgrade it to avoid of fails
 	# if the package already exists with the previous version
 	brew install --force ${STATIC_OSX_PKGS} || brew upgrade ${STATIC_OSX_PKGS}
-	pip install --force-reinstall -r test-run/requirements.txt
+	pip3 install --force-reinstall -r test-run/requirements.txt
 
 # builddir used in this target - is a default build path from cmake
 # ExternalProject_Add()
@@ -370,7 +383,6 @@ test_static_build_cmake_osx_github_actions: base_deps_osx_github_actions test_st
 
 deps_freebsd:
 	sudo pkg install -y git cmake gmake icu libiconv \
-		autoconf automake libtool \
 		python37 py37-yaml py37-gevent py37-six py37-msgpack
 	[ ! -e /usr/bin/python3 ] && sudo ln -s /usr/local/bin/python3.7 /usr/bin/python3
 
@@ -381,7 +393,7 @@ build_freebsd:
 test_freebsd_no_deps: build_freebsd deps_freebsd
 	cd test && ./test-run.py --force $(TEST_RUN_EXTRA_PARAMS)
 
-test_freebsd: test_freebsd_no_deps
+test_freebsd: deps_freebsd test_freebsd_no_deps
 
 # ###################
 # Jepsen testing
