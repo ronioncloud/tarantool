@@ -561,7 +561,7 @@ test:do_execsql_test(
         SELECT "name" FROM "_trigger" WHERE "name"='trigger';
     ]], {
         -- <trigger1-8.2>
-        
+
         -- </trigger1-8.2>
     })
 
@@ -583,7 +583,7 @@ test:do_execsql_test(
         SELECT "name" FROM "_trigger" WHERE "name"='trigger';
     ]], {
         -- <trigger1-8.4>
-        
+
         -- </trigger1-8.4>
     })
 
