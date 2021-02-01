@@ -37,6 +37,10 @@ struct module {
 	 */
 	void *handle;
 	/**
+	 * Package hash module belongs to.
+	 */
+	struct mh_strnptr_t *hash;
+	/**
 	 * List of associated symbols (functions).
 	 */
 	struct rlist funcs_list;

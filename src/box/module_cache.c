@@ -72,12 +72,13 @@ func_split_name(const char *str, struct func_name *name)
  * Look up a module in the modules cache.
  */
 static struct module *
-module_cache_find(const char *name, const char *name_end)
+module_cache_find(struct mh_strnptr_t *h, const char *name,
+		  const char *name_end)
 {
-	mh_int_t e = mh_strnptr_find_inp(mod_hash, name, name_end - name);
-	if (e == mh_end(mod_hash))
+	mh_int_t e = mh_strnptr_find_inp(h, name, name_end - name);
+	if (e == mh_end(h))
 		return NULL;
-	return mh_strnptr_node(mod_hash, e)->val;
+	return mh_strnptr_node(h, e)->val;
 }
 
 /**
@@ -86,6 +87,7 @@ module_cache_find(const char *name, const char *name_end)
 static int
 module_cache_add(struct module *module)
 {
+	struct mh_strnptr_t *h = module->hash;
 	size_t package_len = strlen(module->package);
 	const struct mh_strnptr_node_t nd = {
 		.str	= module->package,
@@ -94,7 +96,7 @@ module_cache_add(struct module *module)
 		.val	= module,
 	};
 
-	if (mh_strnptr_put(mod_hash, &nd, NULL, NULL) == mh_end(mod_hash)) {
+	if (mh_strnptr_put(h, &nd, NULL, NULL) == mh_end(h)) {
 		diag_set(OutOfMemory, sizeof(nd), "malloc",
 			 "module cache node");
 		return -1;
@@ -107,14 +109,17 @@ module_cache_add(struct module *module)
  * key based it is safe to just update the value.
  */
 static int
-module_cache_update(const char *name, const char *name_end,
-		    struct module *module)
+module_cache_update(struct module *module)
 {
-	mh_int_t e = mh_strnptr_find_inp(mod_hash, name, name_end - name);
-	if (e == mh_end(mod_hash))
+	struct mh_strnptr_t *h = module->hash;
+	const char *name = module->package;
+	size_t len = strlen(module->package);
+
+	mh_int_t e = mh_strnptr_find_inp(h, name, len);
+	if (e == mh_end(h))
 		return -1;
-	mh_strnptr_node(mod_hash, e)->str = module->package;
-	mh_strnptr_node(mod_hash, e)->val = module;
+	mh_strnptr_node(h, e)->str = module->package;
+	mh_strnptr_node(h, e)->val = module;
 	return 0;
 }
 
@@ -122,11 +127,15 @@ module_cache_update(const char *name, const char *name_end,
  * Delete a module from the modules cache.
  */
 static void
-module_cache_del(const char *name, const char *name_end)
+module_cache_del(struct module *module)
 {
-	mh_int_t e = mh_strnptr_find_inp(mod_hash, name, name_end - name);
-	if (e != mh_end(mod_hash))
-		mh_strnptr_del(mod_hash, e, NULL);
+	struct mh_strnptr_t *h = module->hash;
+	const char *name = module->package;
+	size_t len = strlen(module->package);
+
+	mh_int_t e = mh_strnptr_find_inp(h, name, len);
+	if (e != mh_end(h))
+		mh_strnptr_del(h, e, NULL);
 }
 
 /**
@@ -135,7 +144,7 @@ module_cache_del(const char *name, const char *name_end)
 static void
 module_set_orphan(struct module *module)
 {
-	module->package[0] = '\0';
+	module->hash = NULL;
 }
 
 /**
@@ -144,7 +153,7 @@ module_set_orphan(struct module *module)
 static bool
 module_is_orphan(struct module *module)
 {
-	return module->package[0] == '\0';
+	return module->hash == NULL;
 }
 
 /**
@@ -256,11 +265,8 @@ module_unref(struct module *module)
 {
 	assert(module->refs > 0);
 	if (module->refs-- == 1) {
-		if (!module_is_orphan(module)) {
-			size_t len = strlen(module->package);
-			module_cache_del(module->package,
-					 &module->package[len]);
-		}
+		if (!module_is_orphan(module))
+			module_cache_del(module);
 		module_delete(module);
 	}
 }
@@ -273,7 +279,8 @@ module_unref(struct module *module)
  * for cases of a function reload.
  */
 static struct module *
-module_load(const char *package, const char *package_end)
+module_load(struct mh_strnptr_t *h, const char *package,
+	    const char *package_end)
 {
 	char path[PATH_MAX];
 	if (module_find(package, package_end, path, sizeof(path)) != 0)
@@ -290,6 +297,7 @@ module_load(const char *package, const char *package_end)
 	module->package[package_len] = 0;
 	rlist_create(&module->funcs_list);
 	module->refs = 0;
+	module->hash = h;
 
 	const char *tmpdir = getenv("TMPDIR");
 	if (tmpdir == NULL)
@@ -396,9 +404,9 @@ module_sym_load(struct module_sym *mod_sym)
 	 * loading and take it from the cache.
 	 */
 	struct module *cached, *module;
-	cached = module_cache_find(name.package, name.package_end);
+	cached = module_cache_find(mod_hash, name.package, name.package_end);
 	if (cached == NULL) {
-		module = module_load(name.package, name.package_end);
+		module = module_load(mod_hash, name.package, name.package_end);
 		if (module == NULL)
 			return -1;
 		if (module_cache_add(module) != 0) {
@@ -498,13 +506,15 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
 int
 module_reload(const char *package, const char *package_end)
 {
-	struct module *old = module_cache_find(package, package_end);
+	struct module *old, *new;
+
+	old = module_cache_find(mod_hash, package, package_end);
 	if (old == NULL) {
 		diag_set(ClientError, ER_NO_SUCH_MODULE, package);
 		return -1;
 	}
 
-	struct module *new = module_load(package, package_end);
+	new = module_load(mod_hash, package, package_end);
 	if (new == NULL)
 		return -1;
 
@@ -531,7 +541,7 @@ module_reload(const char *package, const char *package_end)
 		module_unref(old);
 	}
 
-	if (module_cache_update(package, package_end, new) != 0) {
+	if (module_cache_update(new) != 0) {
 		/*
 		 * Module cache must be consistent at this moment,
 		 * we've looked up for the package recently. If
