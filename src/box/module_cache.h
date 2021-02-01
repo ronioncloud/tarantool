@@ -80,11 +80,12 @@ struct module_sym {
  * Load a new module symbol.
  *
  * @param mod_sym symbol to load.
+ * @param is_box_schema flag if request comes from `box.schema.func`.
  *
  * @returns 0 on succse, -1 otherwise, diag is set.
  */
 int
-module_sym_load(struct module_sym *mod_sym);
+module_sym_load(struct module_sym *mod_sym, bool is_box_schema);
 
 /**
  * Unload a module's symbol.

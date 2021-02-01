@@ -23,7 +23,7 @@
 #include "module_cache.h"
 
 /** Modules name to descriptor hash. */
-static struct mh_strnptr_t *mod_hash = NULL;
+static struct mh_strnptr_t *box_schema_hash = NULL;
 
 /**
  * Parsed symbol and package names.
@@ -44,6 +44,16 @@ struct func_name {
 	 */
 	const char *package_end;
 };
+
+/**
+ * Return module hash depending on where request comes
+ * from: if it is legacy `box.schema.func` interface or not.
+ */
+static inline struct mh_strnptr_t *
+hash_tbl(bool is_box_schema)
+{
+	return is_box_schema ? box_schema_hash : NULL;
+}
 
 /***
  * Split function name to symbol and package names.
@@ -391,7 +401,7 @@ module_sym(struct module *module, const char *name)
 }
 
 int
-module_sym_load(struct module_sym *mod_sym)
+module_sym_load(struct module_sym *mod_sym, bool is_box_schema)
 {
 	assert(mod_sym->addr == NULL);
 
@@ -404,9 +414,10 @@ module_sym_load(struct module_sym *mod_sym)
 	 * loading and take it from the cache.
 	 */
 	struct module *cached, *module;
-	cached = module_cache_find(mod_hash, name.package, name.package_end);
+	struct mh_strnptr_t *h = hash_tbl(is_box_schema);
+	cached = module_cache_find(h, name.package, name.package_end);
 	if (cached == NULL) {
-		module = module_load(mod_hash, name.package, name.package_end);
+		module = module_load(h, name.package, name.package_end);
 		if (module == NULL)
 			return -1;
 		if (module_cache_add(module) != 0) {
@@ -463,7 +474,7 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
 	 * compatibility sake!
 	 */
 	if (mod_sym->addr == NULL) {
-		if (module_sym_load(mod_sym) != 0)
+		if (module_sym_load(mod_sym, true) != 0)
 			return -1;
 	}
 
@@ -508,13 +519,17 @@ module_reload(const char *package, const char *package_end)
 {
 	struct module *old, *new;
 
-	old = module_cache_find(mod_hash, package, package_end);
+	/*
+	 * Explicit module reloading is deprecated interface,
+	 * so always use box_schema_hash.
+	 */
+	old = module_cache_find(box_schema_hash, package, package_end);
 	if (old == NULL) {
 		diag_set(ClientError, ER_NO_SUCH_MODULE, package);
 		return -1;
 	}
 
-	new = module_load(mod_hash, package, package_end);
+	new = module_load(box_schema_hash, package, package_end);
 	if (new == NULL)
 		return -1;
 
@@ -591,10 +606,10 @@ restore:
 int
 module_init(void)
 {
-	mod_hash = mh_strnptr_new();
-	if (mod_hash == NULL) {
-		diag_set(OutOfMemory, sizeof(*mod_hash),
-			 "malloc", "modules hash table");
+	box_schema_hash = mh_strnptr_new();
+	if (box_schema_hash == NULL) {
+		diag_set(OutOfMemory, sizeof(*box_schema_hash),
+			 "malloc", "modules box_schema_hash");
 		return -1;
 	}
 	return 0;
@@ -603,11 +618,12 @@ module_init(void)
 void
 module_free(void)
 {
-	while (mh_size(mod_hash) > 0) {
-		mh_int_t i = mh_first(mod_hash);
-		struct module *m = mh_strnptr_node(mod_hash, i)->val;
+	struct mh_strnptr_t *h = box_schema_hash;
+	while (mh_size(h) > 0) {
+		mh_int_t i = mh_first(h);
+		struct module *m = mh_strnptr_node(h, i)->val;
 		module_unref(m);
 	}
-	mh_strnptr_delete(mod_hash);
-	mod_hash = NULL;
+	mh_strnptr_delete(box_schema_hash);
+	box_schema_hash = NULL;
 }
