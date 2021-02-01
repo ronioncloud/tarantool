@@ -130,6 +130,24 @@ module_cache_del(const char *name, const char *name_end)
 }
 
 /**
+ * Mark module as out of cache.
+ */
+static void
+module_set_orphan(struct module *module)
+{
+	module->package[0] = '\0';
+}
+
+/**
+ * Test if module is out of cache.
+ */
+static bool
+module_is_orphan(struct module *module)
+{
+	return module->package[0] == '\0';
+}
+
+/**
  * Arguments for luaT_module_find used by lua_cpcall().
  */
 struct module_find_ctx {
@@ -204,6 +222,47 @@ module_find(const char *package, const char *package_end,
 	}
 	assert(top == lua_gettop(L)); /* cpcall discard results */
 	return 0;
+}
+
+/**
+ * Delete a module.
+ */
+static void
+module_delete(struct module *module)
+{
+	struct errinj *e = errinj(ERRINJ_DYN_MODULE_COUNT, ERRINJ_INT);
+	if (e != NULL)
+		--e->iparam;
+	dlclose(module->handle);
+	TRASH(module);
+	free(module);
+}
+
+/**
+ * Increase reference to a module.
+ */
+static void
+module_ref(struct module *module)
+{
+	assert(module->refs >= 0);
+	module->refs++;
+}
+
+/**
+ * Decrease module reference and delete it if last one.
+ */
+static void
+module_unref(struct module *module)
+{
+	assert(module->refs > 0);
+	if (module->refs-- == 1) {
+		if (!module_is_orphan(module)) {
+			size_t len = strlen(module->package);
+			module_cache_del(module->package,
+					 &module->package[len]);
+		}
+		module_delete(module);
+	}
 }
 
 /**
@@ -301,35 +360,12 @@ module_load(const char *package, const char *package_end)
 	struct errinj *e = errinj(ERRINJ_DYN_MODULE_COUNT, ERRINJ_INT);
 	if (e != NULL)
 		++e->iparam;
+	module_ref(module);
 	return module;
 
 error:
 	free(module);
 	return NULL;
-}
-
-/**
- * Delete a module.
- */
-static void
-module_delete(struct module *module)
-{
-	struct errinj *e = errinj(ERRINJ_DYN_MODULE_COUNT, ERRINJ_INT);
-	if (e != NULL)
-		--e->iparam;
-	dlclose(module->handle);
-	TRASH(module);
-	free(module);
-}
-
-/**
- * Check if a module is unused and delete it then.
- */
-static void
-module_gc(struct module *module)
-{
-	if (rlist_empty(&module->funcs_list) && module->refs == 0)
-		module_delete(module);
 }
 
 /**
@@ -366,28 +402,17 @@ module_sym_load(struct module_sym *mod_sym)
 		if (module == NULL)
 			return -1;
 		if (module_cache_add(module) != 0) {
-			module_delete(module);
+			module_unref(module);
 			return -1;
 		}
 	} else {
+		module_ref(cached);
 		module = cached;
 	}
 
 	mod_sym->addr = module_sym(module, name.sym);
 	if (mod_sym->addr == NULL) {
-		if (cached == NULL) {
-			/*
-			 * In case if it was a first load we should
-			 * clean the cache immediately otherwise
-			 * the module continue being referenced even
-			 * if there will be no use of it.
-			 *
-			 * Note the module_sym set an error thus be
-			 * careful to not wipe it.
-			 */
-			module_cache_del(name.package, name.package_end);
-			module_delete(module);
-		}
+		module_unref(module);
 		return -1;
 	}
 
@@ -403,12 +428,11 @@ module_sym_unload(struct module_sym *mod_sym)
 		return;
 
 	rlist_del(&mod_sym->item);
-	if (rlist_empty(&mod_sym->module->funcs_list)) {
-		struct func_name name;
-		func_split_name(mod_sym->name, &name);
-		module_cache_del(name.package, name.package_end);
-	}
-	module_gc(mod_sym->module);
+	/*
+	 * Unref action might delete module
+	 * so call it after rlist_del.
+	 */
+	module_unref(mod_sym->module);
 
 	mod_sym->module = NULL;
 	mod_sym->addr = NULL;
@@ -454,10 +478,9 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
 	 */
 	struct module *module = mod_sym->module;
 	assert(module != NULL);
-	++module->refs;
+	module_ref(module);
 	int rc = mod_sym->addr(&ctx, data, data + data_sz);
-	--module->refs;
-	module_gc(module);
+	module_unref(module);
 	region_truncate(region, region_svp);
 
 	if (rc != 0) {
@@ -485,6 +508,9 @@ module_reload(const char *package, const char *package_end)
 	if (new == NULL)
 		return -1;
 
+	/* Extra ref until cache get updated */
+	module_ref(old);
+
 	struct module_sym *mod_sym, *tmp;
 	rlist_foreach_entry_safe(mod_sym, &old->funcs_list, item, tmp) {
 		struct func_name name;
@@ -499,6 +525,10 @@ module_reload(const char *package, const char *package_end)
 
 		mod_sym->module = new;
 		rlist_move(&new->funcs_list, &mod_sym->item);
+
+		/* Move reference to a new place */
+		module_ref(new);
+		module_unref(old);
 	}
 
 	if (module_cache_update(package, package_end, new) != 0) {
@@ -511,10 +541,15 @@ module_reload(const char *package, const char *package_end)
 		panic("module: can't update module cache (%s)", package);
 	}
 
-	module_gc(old);
+	module_set_orphan(old);
+	module_unref(old);
+
+	/* From explicit load above */
+	module_unref(new);
 	return 0;
 
 restore:
+	module_set_orphan(new);
 	/*
 	 * Some old-dso func can't be load from new module,
 	 * restore old functions.
@@ -533,11 +568,13 @@ restore:
 		}
 		mod_sym->module = old;
 		rlist_move(&old->funcs_list, &mod_sym->item);
+		module_ref(old);
+		module_unref(new);
 	} while (mod_sym != rlist_first_entry(&old->funcs_list,
 					      struct module_sym,
 					      item));
 	assert(rlist_empty(&new->funcs_list));
-	module_delete(new);
+	module_unref(new);
 	return -1;
 }
 
@@ -559,7 +596,7 @@ module_free(void)
 	while (mh_size(mod_hash) > 0) {
 		mh_int_t i = mh_first(mod_hash);
 		struct module *m = mh_strnptr_node(mod_hash, i)->val;
-		module_gc(m);
+		module_unref(m);
 	}
 	mh_strnptr_delete(mod_hash);
 	mod_hash = NULL;
