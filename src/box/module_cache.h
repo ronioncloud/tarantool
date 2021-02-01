@@ -6,6 +6,10 @@
 
 #pragma once
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "small/rlist.h"
 
 #if defined(__cplusplus)
@@ -49,6 +53,10 @@ struct module {
 	 */
 	int64_t refs;
 	/**
+	 * Storage stat for identity check.
+	 */
+	struct stat st;
+	/**
 	 * Module's package name.
 	 */
 	char package[0];
@@ -75,6 +83,15 @@ struct module_sym {
 	 */
 	char *name;
 };
+
+/**
+ * Test if module is orphan and cache carries
+ * up to date version instead.
+ *
+ * @retval true if module is orphan, false otherwise.
+ */
+bool
+module_is_orphan(struct module *module);
 
 /**
  * Load a new module symbol.
@@ -111,6 +128,25 @@ module_sym_unload(struct module_sym *mod_sym);
 int
 module_sym_call(struct module_sym *mod_sym, struct port *args,
 		struct port *ret);
+
+/**
+ * Load new module instance.
+ *
+ * @param package shared library path start.
+ * @param package_end shared library path end.
+ *
+ * @return 0 on succes, -1 otherwise, diag is set.
+ */
+struct module *
+module_load(const char *package, const char *package_end);
+
+/**
+ * Unload module instance.
+ *
+ * @param module instance to unload.
+ */
+void
+module_unload(struct module *module);
 
 /**
  * Reload a module and all associated symbols.

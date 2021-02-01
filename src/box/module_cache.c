@@ -19,11 +19,33 @@
 #include "error.h"
 #include "lua/utils.h"
 #include "libeio/eio.h"
+#include "trivia/util.h"
 
 #include "module_cache.h"
 
-/** Modules name to descriptor hash. */
+/**
+ * Modules names to descriptor hashes. The first one
+ * for modules created with old `box.schema.func`
+ * interface.
+ *
+ * Here is an important moment for backward compatibility.
+ * The `box.schema.func` operations always use cache and
+ * if a module is updated on a storage device or even
+ * no longer present, then lazy symbol resolving is done
+ * via previously loaded copy. To update modules one have
+ * to reload them manually.
+ *
+ * In turn new API implies to use module_load/unload explicit
+ * interface, and when module is re-loaded from cache then
+ * we make a cache validation to be sure the copy on storage
+ * is up to date.
+ *
+ * Due to all this we have to keep two hash tables. Probably
+ * we should deprecate explicit reload at all and require
+ * manual load/unload instead. But later.
+ */
 static struct mh_strnptr_t *box_schema_hash = NULL;
+static struct mh_strnptr_t *mod_hash = NULL;
 
 /**
  * Parsed symbol and package names.
@@ -52,7 +74,7 @@ struct func_name {
 static inline struct mh_strnptr_t *
 hash_tbl(bool is_box_schema)
 {
-	return is_box_schema ? box_schema_hash : NULL;
+	return is_box_schema ? box_schema_hash : mod_hash;
 }
 
 /***
@@ -160,7 +182,7 @@ module_set_orphan(struct module *module)
 /**
  * Test if module is out of cache.
  */
-static bool
+bool
 module_is_orphan(struct module *module)
 {
 	return module->hash == NULL;
@@ -289,13 +311,9 @@ module_unref(struct module *module)
  * for cases of a function reload.
  */
 static struct module *
-module_load(struct mh_strnptr_t *h, const char *package,
-	    const char *package_end)
+module_new(const char *path, struct mh_strnptr_t *h,
+	   const char *package, const char *package_end)
 {
-	char path[PATH_MAX];
-	if (module_find(package, package_end, path, sizeof(path)) != 0)
-		return NULL;
-
 	int package_len = package_end - package;
 	struct module *module = malloc(sizeof(*module) + package_len + 1);
 	if (module == NULL) {
@@ -334,8 +352,8 @@ module_load(struct mh_strnptr_t *h, const char *package,
 		goto error;
 	}
 
-	struct stat st;
-	if (stat(path, &st) < 0) {
+	struct stat *st = &module->st;
+	if (stat(path, st) < 0) {
 		diag_set(SystemError, "failed to stat() module %s", path);
 		goto error;
 	}
@@ -347,7 +365,7 @@ module_load(struct mh_strnptr_t *h, const char *package,
 	}
 
 	int dest_fd = open(load_name, O_WRONLY | O_CREAT | O_TRUNC,
-			   st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO));
+			   st->st_mode & (S_IRWXU | S_IRWXG | S_IRWXO));
 	if (dest_fd < 0) {
 		diag_set(SystemError, "failed to open file %s for writing ",
 			 load_name);
@@ -355,10 +373,10 @@ module_load(struct mh_strnptr_t *h, const char *package,
 		goto error;
 	}
 
-	off_t ret = eio_sendfile_sync(dest_fd, source_fd, 0, st.st_size);
+	off_t ret = eio_sendfile_sync(dest_fd, source_fd, 0, st->st_size);
 	close(source_fd);
 	close(dest_fd);
-	if (ret != st.st_size) {
+	if (ret != st->st_size) {
 		diag_set(SystemError, "failed to copy DSO %s to %s",
 			 path, load_name);
 		goto error;
@@ -403,30 +421,52 @@ module_sym(struct module *module, const char *name)
 int
 module_sym_load(struct module_sym *mod_sym, bool is_box_schema)
 {
+	struct module *cached, *module;
 	assert(mod_sym->addr == NULL);
 
 	struct func_name name;
 	func_split_name(mod_sym->name, &name);
 
-	/*
-	 * In case if module has been loaded already by
-	 * some previous call we can eliminate redundant
-	 * loading and take it from the cache.
-	 */
-	struct module *cached, *module;
-	struct mh_strnptr_t *h = hash_tbl(is_box_schema);
-	cached = module_cache_find(h, name.package, name.package_end);
-	if (cached == NULL) {
-		module = module_load(h, name.package, name.package_end);
-		if (module == NULL)
-			return -1;
-		if (module_cache_add(module) != 0) {
-			module_unref(module);
-			return -1;
+	if (is_box_schema) {
+		/*
+		 * Deprecated interface -- request comes
+		 * from box.schema.func.
+		 *
+		 * In case if module has been loaded already by
+		 * some previous call we can eliminate redundant
+		 * loading and take it from the cache.
+		 */
+		struct mh_strnptr_t *h = hash_tbl(is_box_schema);
+		cached = module_cache_find(h, name.package, name.package_end);
+		if (cached == NULL) {
+			char path[PATH_MAX];
+			if (module_find(name.package, name.package_end,
+					path, sizeof(path)) != 0) {
+				return -1;
+			}
+			module = module_new(path, h, name.package,
+					    name.package_end);
+			if (module == NULL)
+				return -1;
+			if (module_cache_add(module) != 0) {
+				module_unref(module);
+				return -1;
+			}
+		} else {
+			module_ref(cached);
+			module = cached;
 		}
+		mod_sym->module = module;
 	} else {
-		module_ref(cached);
-		module = cached;
+		/*
+		 * New approach is always load module
+		 * explicitly and pass it inside symbol,
+		 * the refernce to the module already has
+		 * to be incremented.
+		 */
+		assert(mod_sym->module->refs > 0);
+		module_ref(mod_sym->module);
+		module = mod_sym->module;
 	}
 
 	mod_sym->addr = module_sym(module, name.sym);
@@ -435,7 +475,6 @@ module_sym_load(struct module_sym *mod_sym, bool is_box_schema)
 		return -1;
 	}
 
-	mod_sym->module = module;
 	rlist_add(&module->funcs_list, &mod_sym->item);
 	return 0;
 }
@@ -514,6 +553,74 @@ module_sym_call(struct module_sym *mod_sym, struct port *args,
 	return rc;
 }
 
+struct module *
+module_load(const char *package, const char *package_end)
+{
+	char path[PATH_MAX];
+	if (module_find(package, package_end, path, sizeof(path)) != 0)
+		return NULL;
+
+	struct module *cached, *module;
+	struct mh_strnptr_t *h = hash_tbl(false);
+	cached = module_cache_find(h, package, package_end);
+	if (cached == NULL) {
+		module = module_new(path, h, package, package_end);
+		if (module == NULL)
+			return NULL;
+		if (module_cache_add(module) != 0) {
+			module_unref(module);
+			return NULL;
+		}
+		return module;
+	}
+
+	struct stat st;
+	if (stat(path, &st) != 0) {
+		diag_set(SystemError, "module: stat() module %s", path);
+		return NULL;
+	}
+
+	/*
+	 * When module comes from cache make sure that
+	 * it is not changed on the storage device. The
+	 * test below still can miss update if cpu data
+	 * been manually moved backward and device/inode
+	 * persisted but this is a really rare situation.
+	 *
+	 * If update is needed one can simply "touch file.so"
+	 * to invalidate the cache entry.
+	 */
+	if (cached->st.st_dev == st.st_dev &&
+	    cached->st.st_ino == st.st_ino &&
+	    cached->st.st_size == st.st_size &&
+	    memcmp(&cached->st.st_mtim, &st.st_mtim,
+		   sizeof(st.st_mtim)) == 0) {
+		module_ref(cached);
+		return cached;
+	}
+
+	/*
+	 * Load a new module, update the cache
+	 * and orphan an old module instance.
+	 */
+	module = module_new(path, h, package, package_end);
+	if (module == NULL)
+		return NULL;
+	if (module_cache_update(module) != 0) {
+		module_unref(module);
+		return NULL;
+	}
+
+	module_set_orphan(cached);
+	return module;
+}
+
+void
+module_unload(struct module *module)
+{
+	module_unref(module);
+}
+
 int
 module_reload(const char *package, const char *package_end)
 {
@@ -529,7 +636,11 @@ module_reload(const char *package, const char *package_end)
 		return -1;
 	}
 
-	new = module_load(box_schema_hash, package, package_end);
+	char path[PATH_MAX];
+	if (module_find(package, package_end, path, sizeof(path)) != 0)
+		return -1;
+
+	new = module_new(path, box_schema_hash, package, package_end);
 	if (new == NULL)
 		return -1;
 
@@ -606,11 +717,21 @@ restore:
 int
 module_init(void)
 {
-	box_schema_hash = mh_strnptr_new();
-	if (box_schema_hash == NULL) {
-		diag_set(OutOfMemory, sizeof(*box_schema_hash),
-			 "malloc", "modules box_schema_hash");
-		return -1;
+	struct mh_strnptr_t **ht[] = {
+		&box_schema_hash,
+		&mod_hash,
+	};
+	for (size_t i = 0; i < lengthof(ht); i++) {
+		*ht[i] = mh_strnptr_new();
+		if (*ht[i] == NULL) {
+			diag_set(OutOfMemory, sizeof(*ht[i]),
+				 "malloc", "modules hash");
+			for (ssize_t j = i - 1; j >= 0; j--) {
+				mh_strnptr_delete(*ht[j]);
+				*ht[j] = NULL;
+			}
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -618,12 +739,18 @@ module_init(void)
 void
 module_free(void)
 {
-	struct mh_strnptr_t *h = box_schema_hash;
-	while (mh_size(h) > 0) {
+	struct mh_strnptr_t **ht[] = {
+		&box_schema_hash,
+		&mod_hash,
+	};
+	for (size_t i = 0; i < lengthof(ht); i++) {
+		struct mh_strnptr_t *h = *ht[i];
+
 		mh_int_t i = mh_first(h);
 		struct module *m = mh_strnptr_node(h, i)->val;
 		module_unref(m);
+
+		mh_strnptr_delete(h);
+		*ht[i] = NULL;
 	}
-	mh_strnptr_delete(box_schema_hash);
-	box_schema_hash = NULL;
 }
