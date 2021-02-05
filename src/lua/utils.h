@@ -355,6 +355,17 @@ struct luaL_field {
 };
 
 /**
+ * Find references to tables to look up self references in tables.
+ *
+ * @param L Lua stack.
+ * @param anchortable_index Index of anchor table on stack.
+ * @param mode When the function is called before or after dump
+               function.
+ */
+void
+find_references(struct lua_State *L, int anchortable_index, const char *mode);
+
+/**
  * @brief Convert a value from the Lua stack to a lua_field structure.
  * This function is designed for use with Lua bindings and data
  * serialization functions (YAML, MsgPack, JSON, etc.).
@@ -388,6 +399,7 @@ struct luaL_field {
  *
  * @param L stack
  * @param cfg configuration
+ * @param anchortable_index Index of anchor table on stack.
  * @param opts the Lua serializer additional options.
  * @param index stack index
  * @param field conversion result
@@ -397,8 +409,8 @@ struct luaL_field {
  */
 int
 luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg,
-	     const struct serializer_opts *opts, int index,
-	     struct luaL_field *field);
+	     int anchortable_index, const struct serializer_opts *opts,
+	     int index, struct luaL_field *field);
 
 /**
  * @brief Try to convert userdata/cdata values using defined conversion logic.
@@ -406,18 +418,21 @@ luaL_tofield(struct lua_State *L, struct luaL_serializer *cfg,
  *
  * @param L stack
  * @param cfg configuration
+ * @param anchortable_index Index of anchor table on stack.
  * @param idx stack index
  * @param field conversion result
  */
 void
-luaL_convertfield(struct lua_State *L, struct luaL_serializer *cfg, int idx,
-		  struct luaL_field *field);
+luaL_convertfield(struct lua_State *L, struct luaL_serializer *cfg,
+		  int anchortable_index, int idx, struct luaL_field *field);
 
 /**
  * @brief A wrapper for luaL_tofield() and luaL_convertfield() that
  * tries to convert value or raise an error.
  * @param L stack
  * @param cfg configuration
+ * @param anchortable_index Stack index of table with node visit
+                            and serialization info.
  * @param idx stack index
  * @param field conversion result
  * @sa lua_tofield()
@@ -433,14 +448,14 @@ luaL_convertfield(struct lua_State *L, struct luaL_serializer *cfg, int idx,
  * (tostring) -> (nil) -> exception
  */
 static inline void
-luaL_checkfield(struct lua_State *L, struct luaL_serializer *cfg, int idx,
-		struct luaL_field *field)
+luaL_checkfield(struct lua_State *L, struct luaL_serializer *cfg,
+		int anchortable_index, int idx, struct luaL_field *field)
 {
-	if (luaL_tofield(L, cfg, NULL, idx, field) < 0)
+	if (luaL_tofield(L, cfg, anchortable_index, NULL, idx, field) < 0)
 		luaT_error(L);
 	if (field->type != MP_EXT || field->ext_type != MP_UNKNOWN_EXTENSION)
 		return;
-	luaL_convertfield(L, cfg, idx, field);
+	luaL_convertfield(L, cfg, anchortable_index, idx, field);
 }
 
 void

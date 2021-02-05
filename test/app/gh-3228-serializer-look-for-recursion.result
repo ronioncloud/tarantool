@@ -1,0 +1,84 @@
+-- test-run result file version 2
+test_run = require('test_run').new()
+ | ---
+ | ...
+
+--
+-- gh-3228: Check the error message in the case of a __serialize
+-- function generating infinite recursion.
+--
+setmetatable({}, {__serialize = function(a) return a end})
+ | ---
+ | - []
+ | ...
+setmetatable({}, {__serialize = function(a) return {a} end})
+ | ---
+ | - - []
+ | ...
+setmetatable({}, {__serialize = function(a) return {a, a} end})
+ | ---
+ | - - &0 []
+ |   - *0
+ | ...
+setmetatable({}, {__serialize = function(a) return {a, a, a} end})
+ | ---
+ | - - &0 []
+ |   - *0
+ |   - *0
+ | ...
+setmetatable({}, {__serialize = function(a) return {a, 1} end})
+ | ---
+ | - - []
+ |   - 1
+ | ...
+setmetatable({}, {__serialize = function(a) return {{{{a}}}} end})
+ | ---
+ | - - - - - []
+ | ...
+setmetatable({}, {__serialize = function(a) return {{{{1}}}} end})
+ | ---
+ | - - - - - 1
+ | ...
+b = {}
+ | ---
+ | ...
+setmetatable({b}, {__serialize = function(a) return {a_1 = a, a_2 = a, b_1 = b, b_2 = b} end})
+ | ---
+ | - b_2: &0 []
+ |   a_2: &1
+ |   - *0
+ |   a_1: *1
+ |   b_1: *0
+ | ...
+setmetatable({b}, {__serialize = function(a) return {a_1 = a, a_2 = {a, b}, b = b} end})
+ | ---
+ | - b: &0 []
+ |   a_2:
+ |   - &1
+ |     - *0
+ |   - *0
+ |   a_1: *1
+ | ...
+
+--
+--Check that __eq metamethod is ignored.
+--
+local table = setmetatable({}, {__eq = function(a, b) error('__eq is called') end})
+ | ---
+ | ...
+setmetatable(table, {__serialize = function(a) return a end})
+ | ---
+ | - maxn: 'function: builtin#90'
+ |   copy: 'function: 0x010b3efe88'
+ |   new: 'function: builtin#94'
+ |   move: 'function: 0x010b3e1b40'
+ |   clear: 'function: builtin#95'
+ |   foreach: 'function: 0x010b3e16f8'
+ |   sort: 'function: builtin#93'
+ |   remove: 'function: 0x010b3e19e8'
+ |   foreachi: 'function: 0x010b3e15e8'
+ |   deepcopy: 'function: 0x010b3f9d68'
+ |   getn: 'function: 0x010b3e17d0'
+ |   concat: 'function: builtin#92'
+ |   insert: 'function: builtin#91'
+ | ...

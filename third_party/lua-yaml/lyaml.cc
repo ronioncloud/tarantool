@@ -503,28 +503,54 @@ static yaml_char_t *get_yaml_anchor(struct lua_yaml_dumper *dumper) {
    const char *s = "";
    lua_pushvalue(dumper->L, -1);
    lua_rawget(dumper->L, dumper->anchortable_index);
-   if (!lua_toboolean(dumper->L, -1)) {
+   if (lua_isnil(dumper->L, -1) == 1) {
       lua_pop(dumper->L, 1);
       return NULL;
    }
+   lua_pushstring(dumper->L, "before");
+   lua_rawget(dumper->L, -2);
+   const char *str = NULL;
+   if (lua_type(dumper->L, -1) == LUA_TSTRING) {
+      str = lua_tostring(dumper->L, -1);
+   }
+   lua_Integer number_before = lua_tointeger(dumper->L, -1);
+   lua_pop(dumper->L, 1);
 
-   if (lua_isboolean(dumper->L, -1)) {
+   lua_pushstring(dumper->L, "after");
+   lua_rawget(dumper->L, -2);
+   if (lua_type(dumper->L, -1) == LUA_TSTRING) {
+      str = lua_tostring(dumper->L, -1);
+   }
+   lua_Integer number_after = lua_tointeger(dumper->L, -1);
+   lua_pop(dumper->L, 1);
+
+   if ((number_before > 1 || number_after > 1) && str == NULL) {
       /* this element is referenced more than once but has not been named */
       char buf[32];
       snprintf(buf, sizeof(buf), "%u", dumper->anchor_number++);
       lua_pop(dumper->L, 1);
       lua_pushvalue(dumper->L, -1);
+
+      lua_pushvalue(dumper->L, -1);
+      lua_rawget(dumper->L, dumper->anchortable_index);
+      if (number_before > 1)
+         lua_pushstring(dumper->L, "before");
+      else
+         lua_pushstring(dumper->L, "after");
       lua_pushstring(dumper->L, buf);
       s = lua_tostring(dumper->L, -1);
+      lua_rawset(dumper->L, -3);
       lua_rawset(dumper->L, dumper->anchortable_index);
-   } else {
+   } else if (str != NULL) {
       /* this is an aliased element */
       yaml_event_t ev;
-      const char *str = lua_tostring(dumper->L, -1);
       if (!yaml_alias_event_initialize(&ev, (yaml_char_t *) str) ||
           !yaml_emitter_emit(&dumper->emitter, &ev))
          luaL_error(dumper->L, OOM_ERRMSG);
       lua_pop(dumper->L, 1);
+   } else {
+      lua_pop(dumper->L, 1);
+      return NULL;
    }
    return (yaml_char_t *)s;
 }
@@ -622,7 +648,8 @@ static int dump_node(struct lua_yaml_dumper *dumper)
    (void) unused;
 
    int top = lua_gettop(dumper->L);
-   luaL_checkfield(dumper->L, dumper->cfg, top, &field);
+   luaL_checkfield(dumper->L, dumper->cfg, dumper->anchortable_index, top,
+                   &field);
    switch(field.type) {
    case MP_UINT:
       snprintf(buf, sizeof(buf) - 1, "%" PRIu64, field.ival);
@@ -745,35 +772,6 @@ static int append_output(void *arg, unsigned char *buf, size_t len) {
    return 1;
 }
 
-static void find_references(struct lua_yaml_dumper *dumper) {
-   int newval = -1, type = lua_type(dumper->L, -1);
-   if (type != LUA_TTABLE)
-      return;
-
-   lua_pushvalue(dumper->L, -1); /* push copy of table */
-   lua_rawget(dumper->L, dumper->anchortable_index);
-   if (lua_isnil(dumper->L, -1))
-      newval = 0;
-   else if (!lua_toboolean(dumper->L, -1))
-      newval = 1;
-   lua_pop(dumper->L, 1);
-   if (newval != -1) {
-      lua_pushvalue(dumper->L, -1);
-      lua_pushboolean(dumper->L, newval);
-      lua_rawset(dumper->L, dumper->anchortable_index);
-   }
-   if (newval)
-      return;
-
-   /* recursively process other table values */
-   lua_pushnil(dumper->L);
-   while (lua_next(dumper->L, -2) != 0) {
-      find_references(dumper); /* find references on value */
-      lua_pop(dumper->L, 1);
-      find_references(dumper); /* find references on key */
-   }
-}
-
 int
 lua_yaml_encode(lua_State *L, struct luaL_serializer *serializer,
                 const char *tag_handle, const char *tag_prefix)
@@ -819,7 +817,7 @@ lua_yaml_encode(lua_State *L, struct luaL_serializer *serializer,
    dumper.anchortable_index = lua_gettop(L);
    dumper.anchor_number = 0;
    lua_pushvalue(L, 1); /* push copy of arg we're processing */
-   find_references(&dumper);
+   find_references(L, dumper.anchortable_index, "before");
    dump_document(&dumper);
    if (dumper.error)
       goto error;
