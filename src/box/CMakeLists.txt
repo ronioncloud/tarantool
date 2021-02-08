@@ -195,6 +195,7 @@ add_library(box STATIC
     lua/call.c
     lua/cfg.cc
     lua/console.c
+    lua/cmod.c
     lua/serialize_lua.c
     lua/tuple.c
     lua/slab.c
