@@ -1,4 +1,7 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.8 FATAL_ERROR)
+
+cmake_policy(SET CMP0060 OLD)
+cmake_policy(SET CMP0065 OLD)
 
 project(tarantool C CXX)
 
