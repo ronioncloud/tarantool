@@ -43,19 +43,18 @@ extern "C" {
 #endif /* defined(__cplusplus) */
 
 struct func;
+struct cmod;
 
 /**
  * Dynamic shared module.
  */
 struct module {
-	/** Module dlhandle. */
-	void *handle;
+	/** Low level cmod module. */
+	struct cmod *cmod;
 	/** List of imported functions. */
 	struct rlist funcs;
 	/** Count of active calls. */
 	size_t calls;
-	/** Module's package name. */
-	char package[0];
 };
 
 /** Virtual method table for func object. */

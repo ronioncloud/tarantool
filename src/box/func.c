@@ -34,6 +34,7 @@
 #include "assoc.h"
 #include "lua/utils.h"
 #include "lua/call.h"
+#include "lua/cmod.h"
 #include "error.h"
 #include "errinj.h"
 #include "diag.h"
@@ -95,77 +96,6 @@ func_split_name(const char *str, struct func_name *name)
 	}
 }
 
-/**
- * Arguments for luaT_module_find used by lua_cpcall()
- */
-struct module_find_ctx {
-	const char *package;
-	const char *package_end;
-	char *path;
-	size_t path_len;
-};
-
-/**
- * A cpcall() helper for module_find()
- */
-static int
-luaT_module_find(lua_State *L)
-{
-	struct module_find_ctx *ctx = (struct module_find_ctx *)
-		lua_topointer(L, 1);
-
-	/*
-	 * Call package.searchpath(name, package.cpath) and use
-	 * the path to the function in dlopen().
-	 */
-	lua_getglobal(L, "package");
-
-	lua_getfield(L, -1, "search");
-
-	/* Argument of search: name */
-	lua_pushlstring(L, ctx->package, ctx->package_end - ctx->package);
-
-	lua_call(L, 1, 1);
-	if (lua_isnil(L, -1))
-		return luaL_error(L, "module not found");
-	/* Convert path to absolute */
-	char resolved[PATH_MAX];
-	if (realpath(lua_tostring(L, -1), resolved) == NULL) {
-		diag_set(SystemError, "realpath");
-		return luaT_error(L);
-	}
-
-	snprintf(ctx->path, ctx->path_len, "%s", resolved);
-	return 0;
-}
-
-/**
- * Find path to module using Lua's package.cpath
- * @param package package name
- * @param package_end a pointer to the last byte in @a package + 1
- * @param[out] path path to shared library
- * @param path_len size of @a path buffer
- * @retval 0 on success
- * @retval -1 on error, diag is set
- */
-static int
-module_find(const char *package, const char *package_end, char *path,
-	    size_t path_len)
-{
-	struct module_find_ctx ctx = { package, package_end, path, path_len };
-	lua_State *L = tarantool_L;
-	int top = lua_gettop(L);
-	if (luaT_cpcall(L, luaT_module_find, &ctx) != 0) {
-		int package_len = (int) (package_end - package);
-		diag_set(ClientError, ER_LOAD_MODULE, package_len, package,
-			 lua_tostring(L, -1));
-		lua_settop(L, top);
-		return -1;
-	}
-	assert(top == lua_gettop(L)); /* cpcall discard results */
-	return 0;
-}
-
 static struct mh_strnptr_t *modules = NULL;
 
 static void
@@ -214,11 +144,14 @@ module_cache_find(const char *name, const char *name_end)
 static inline int
 module_cache_put(struct module *module)
 {
-	size_t package_len = strlen(module->package);
-	uint32_t name_hash = mh_strn_hash(module->package, package_len);
+	const char *package = module->cmod->package;
+	size_t package_len = module->cmod->package_len;
 	const struct mh_strnptr_node_t strnode = {
-		module->package, package_len, name_hash, module};
-
+		.str	= package,
+		.len	= package_len,
+		.hash	= mh_strn_hash(package, package_len),
+		.val	= module,
+	};
 	if (mh_strnptr_put(modules, &strnode, NULL, NULL) == mh_end(modules)) {
 		diag_set(OutOfMemory, sizeof(strnode), "malloc", "modules");
 		return -1;
@@ -238,102 +171,55 @@ module_cache_del(const char *name, const char *name_end)
 	mh_strnptr_del(modules, i, NULL);
 }
 
-/*
- * Load a dso.
- * Create a new symlink based on temporary directory and try to
- * load via this symink to load a dso twice for cases of a function
- * reload.
+/**
+ * Allocate a new module instance.
+ */
+static struct module *
+module_new(struct cmod *cmod)
+{
+	struct module *module = malloc(sizeof(*module));
+	if (module == NULL) {
+		diag_set(OutOfMemory, sizeof(struct module),
+			 "malloc", "struct module");
+		return NULL;
+	}
+
+	rlist_create(&module->funcs);
+	module->calls = 0;
+	module->cmod = cmod;
+
+	return module;
+}
+
+/**
+ * Load a new DSO.
  */
 static struct module *
 module_load(const char *package, const char *package_end)
 {
 	char path[PATH_MAX];
-	if (module_find(package, package_end, path, sizeof(path)) != 0)
-		return NULL;
-
 	int package_len = package_end - package;
-	struct module *module = (struct module *)
-		malloc(sizeof(*module) + package_len + 1);
-	if (module == NULL) {
-		diag_set(OutOfMemory, sizeof(struct module) + package_len + 1,
-			 "malloc", "struct module");
+
+	if (cmod_find_package(package, package_len,
+			      path, sizeof(path)) != 0) {
 		return NULL;
 	}
-	memcpy(module->package, package, package_len);
-	module->package[package_len] = 0;
-	rlist_create(&module->funcs);
-	module->calls = 0;
 
-	const char *tmpdir = getenv("TMPDIR");
-	if (tmpdir == NULL)
-		tmpdir = "/tmp";
-	char dir_name[PATH_MAX];
-	int rc = snprintf(dir_name, sizeof(dir_name), "%s/tntXXXXXX", tmpdir);
-	if (rc < 0 || (size_t) rc >= sizeof(dir_name)) {
-		diag_set(SystemError, "failed to generate path to tmp dir");
-		goto error;
+	struct cmod *cmod = cmod_new(package, package_len, path);
+	if (cmod == NULL)
+		return NULL;
+
+	struct module *module = module_new(cmod);
+	if (module == NULL) {
+		cmod_unref(cmod);
+		return NULL;
 	}
 
-	if (mkdtemp(dir_name) == NULL) {
-		diag_set(SystemError, "failed to create unique dir name: %s",
-			 dir_name);
-		goto error;
-	}
-	char load_name[PATH_MAX];
-	rc = snprintf(load_name, sizeof(load_name), "%s/%.*s." TARANTOOL_LIBEXT,
-		      dir_name, package_len, package);
-	if (rc < 0 || (size_t) rc >= sizeof(dir_name)) {
-		diag_set(SystemError, "failed to generate path to DSO");
-		goto error;
-	}
-
-	struct stat st;
-	if (stat(path, &st) < 0) {
-		diag_set(SystemError, "failed to stat() module %s", path);
-		goto error;
-	}
-
-	int source_fd = open(path, O_RDONLY);
-	if (source_fd < 0) {
-		diag_set(SystemError, "failed to open module %s file for" \
-			 " reading", path);
-		goto error;
-	}
-	int dest_fd = open(load_name, O_WRONLY|O_CREAT|O_TRUNC,
-			   st.st_mode & 0777);
-	if (dest_fd < 0) {
-		diag_set(SystemError, "failed to open file %s for writing ",
-			 load_name);
-		close(source_fd);
-		goto error;
-	}
-
-	off_t ret = eio_sendfile_sync(dest_fd, source_fd, 0, st.st_size);
-	close(source_fd);
-	close(dest_fd);
-	if (ret != st.st_size) {
-		diag_set(SystemError, "failed to copy DSO %s to %s",
-			 path, load_name);
-		goto error;
-	}
-
-	module->handle = dlopen(load_name, RTLD_NOW | RTLD_LOCAL);
-	if (unlink(load_name) != 0)
-		say_warn("failed to unlink dso link %s", load_name);
-	if (rmdir(dir_name) != 0)
-		say_warn("failed to delete temporary dir %s", dir_name);
-	if (module->handle == NULL) {
-		diag_set(ClientError, ER_LOAD_MODULE, package_len,
-			  package, dlerror());
-		goto error;
-	}
 	struct errinj *e = errinj(ERRINJ_DYN_MODULE_COUNT, ERRINJ_INT);
 	if (e != NULL)
 		++e->iparam;
+
 	return module;
-error:
-	free(module);
-	return NULL;
 }
 
 static void
@@ -342,7 +228,7 @@ module_delete(struct module *module)
 	struct errinj *e = errinj(ERRINJ_DYN_MODULE_COUNT, ERRINJ_INT);
 	if (e != NULL)
 		--e->iparam;
-	dlclose(module->handle);
+	cmod_unref(module->cmod);
 	TRASH(module);
 	free(module);
 }
@@ -363,7 +249,8 @@ module_gc(struct module *module)
 static box_function_f
 module_sym(struct module *module, const char *name)
 {
-	box_function_f f = (box_function_f)dlsym(module->handle, name);
+	void *handle = module->cmod->handle;
+	box_function_f f = (box_function_f)dlsym(handle, name);
 	if (f == NULL) {
 		diag_set(ClientError, ER_LOAD_FUNCTION, name, dlerror());
 		return NULL;
@@ -529,19 +416,59 @@ func_c_load(struct func_c *func)
 	func_split_name(func->base.def->name, &name);
 
 	struct module *cached, *module;
+	struct cmod *cmod;
+
 	cached = module_cache_find(name.package, name.package_end);
-	if (cached == NULL) {
+	if (cached != NULL) {
+		module = cached;
+		goto resolve_sym;
+	}
+
+	size_t len = name.package_end - name.package;
+	cmod = cmod_cache_find(name.package, len);
+	if (cmod == NULL) {
+		/*
+		 * The module is not present in both
+		 * box.schema.func cache and in cmod
+		 * cache. Thus load it from from the
+		 * scratch and put into cmod cache
+		 * as well.
+		 */
 		module = module_load(name.package, name.package_end);
 		if (module == NULL)
 			return -1;
-		if (module_cache_put(module)) {
+		if (cmod_cache_put(module->cmod) != 0) {
 			module_delete(module);
 			return -1;
 		}
+
+		/*
+		 * Fresh cmod instance is bound to
+		 * the module and get unref upon
+		 * module unload.
+		 */
+		cmod = NULL;
 	} else {
-		module = cached;
+		/*
+		 * Someone already has loaded this
+		 * shared library via cmod interface,
+		 * thus simply increase the reference
+		 * (and don't forget to unref later).
+		 */
+		module = module_new(cmod);
+		if (module == NULL)
+			return -1;
+		cmod_ref(cmod);
 	}
 
+	if (module_cache_put(module)) {
+		if (cmod != NULL)
+			cmod_unref(cmod);
+		module_delete(module);
+		return -1;
+	}
+
+resolve_sym:
 	func->func = module_sym(module, name.sym);
 	if (func->func == NULL) {
 		if (cached == NULL) {
