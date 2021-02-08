@@ -258,8 +258,8 @@ test_debian_install_luacheck:
 	apt install -y lua5.1 luarocks
 	luarocks install luacheck
 
-test_debian_luacheck: test_debian_install_luacheck configure_debian
-	make luacheck
+test_debian_luacheck: test_debian_install_luacheck
+	luacheck --codes --config ./.luacheckrc .
 
 # Out-Of-Source build
 
