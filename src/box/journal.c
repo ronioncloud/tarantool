@@ -55,3 +55,66 @@ journal_entry_new(size_t n_rows, struct region *region,
 			     complete_data);
 	return entry;
 }
+
+struct journal_queue_entry {
+	/** The fiber waiting for queue space to free. */
+	struct fiber *fiber;
+	/** Whether the fiber should be waken up regardless of queue size. */
+	bool is_ready;
+	/** A link in all waiting fibers list. */
+	struct rlist in_queue;
+};
+
+/**
+ * Wake up the next waiter in journal queue.
+ */
+static inline void
+journal_queue_wakeup_next(struct rlist *link, bool force_ready)
+{
+	/* Empty queue or last entry in queue. */
+	if (link == rlist_last(&current_journal->waiters)) {
+		current_journal->queue_is_awake = false;
+		return;
+	}
+	/*
+	 * When the queue isn't forcefully emptied, no need to wake everyone
+	 * else up until there's some free space.
+	 */
+	if (!force_ready && journal_queue_is_full()) {
+		current_journal->queue_is_awake = false;
+		return;
+	}
+	struct journal_queue_entry *e = rlist_entry(rlist_next(link), typeof(*e),
+						    in_queue);
+	e->is_ready = force_ready;
+	fiber_wakeup(e->fiber);
+}
+
+void
+journal_queue_wakeup(bool force_ready)
+{
+	assert(!rlist_empty(&current_journal->waiters));
+	if (current_journal->queue_is_awake)
+		return;
+	current_journal->queue_is_awake = true;
+	journal_queue_wakeup_next(&current_journal->waiters, force_ready);
+}
+
+void
+journal_wait_queue(void)
+{
+	struct journal_queue_entry entry = {
+		.fiber = fiber(),
+		.is_ready = false,
+	};
+	rlist_add_tail_entry(&current_journal->waiters, &entry, in_queue);
+	/*
+	 * Will be waken up by either queue emptying or a synchronous write.
+	 */
+	while (journal_queue_is_full() && !entry.is_ready)
+		fiber_yield();
+
+	journal_queue_wakeup_next(&entry.in_queue, entry.is_ready);
+	assert(&entry.in_queue == rlist_first(&current_journal->waiters));
+	rlist_del(&entry.in_queue);
+}
