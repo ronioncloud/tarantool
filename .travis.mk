@@ -312,7 +312,7 @@ deps_osx:
 deps_osx_github_actions:
 	# try to install the packages either upgrade it to avoid of fails
 	# if the package already exists with the previous version
-	brew install --force ${OSX_PKGS_MIN} || brew upgrade ${OSX_PKGS_MIN}
+	brew install --force ${OSX_PKGS} || brew upgrade ${OSX_PKGS}
 	pip3 install --force-reinstall -r test-run/requirements.txt
 
 build_osx:
