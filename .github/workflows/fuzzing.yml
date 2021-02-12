@@ -1,0 +1,46 @@
+name: fuzzing
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - 'src/**'
+      - 'test/fuzz/**'
+      - 'test/static/corpus/**'
+
+jobs:
+  fuzzing:
+    # We want to run on external PRs, but not on our own internal PRs
+    # as they'll be run by the push to the branch.
+    if: ( github.event_name == 'push' ||
+        github.event.pull_request.head.repo.full_name != github.repository )
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined]
+
+    steps:
+      - name: build fuzzers (${{ matrix.sanitizer }})
+        id: build
+        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@master
+        with:
+          oss-fuzz-project-name: 'tarantool'
+          dry-run: false
+          sanitizer: ${{ matrix.sanitizer }}
+      - name: run fuzzers (${{ matrix.sanitizer }})
+        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@master
+        with:
+          oss-fuzz-project-name: 'tarantool'
+          fuzz-seconds: 600
+          dry-run: false
+          sanitizer: ${{ matrix.sanitizer }}
+      - name: upload crash
+        uses: actions/upload-artifact@v1
+        if: failure() && steps.build.outcome == 'success'
+        with:
+          name: ${{ matrix.sanitizer }}-artifacts
+          retention-days: 21
+          path: ./out/artifacts
