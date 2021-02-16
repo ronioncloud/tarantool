@@ -268,6 +268,18 @@ strnindex(const char **haystack, const char *needle, uint32_t len, uint32_t hmax
 #endif
 
 /**
+ * The USED function attribute can be used to avoid removal
+ * by linker unused section removal.
+ *
+ * \example USED int fun(void);
+ */
+#if __has_attribute(used) || defined(__GNUC__)
+#  define USED __attribute__((used))
+#else
+#  define USED
+#endif
+
+/**
  * A diagnostic is generated when a function is marked with NODISCARD and
  * the function call appears as a potentially-evaluated discarded-value
  * expression that is not explicitly cast to void.

@@ -109,6 +109,7 @@ set (server_sources
      path_lock.c
      systemd.c
      version.c
+     on_shutdown.c
      lua/digest.c
      lua/init.c
      lua/fiber.c
@@ -141,6 +142,7 @@ set (server_sources
 set(api_headers
     ${CMAKE_BINARY_DIR}/src/trivia/config.h
     ${CMAKE_SOURCE_DIR}/src/trivia/util.h
+    ${CMAKE_SOURCE_DIR}/src/on_shutdown.h
     ${CMAKE_SOURCE_DIR}/src/lib/core/say.h
     ${CMAKE_SOURCE_DIR}/src/lib/core/fiber.h
     ${CMAKE_SOURCE_DIR}/src/lib/core/fiber_cond.h
