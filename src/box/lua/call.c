@@ -1023,7 +1023,7 @@ lbox_func_new_or_delete(struct trigger *trigger, void *event)
 }
 
 static struct trigger on_alter_func_in_lua = {
-	RLIST_LINK_INITIALIZER, lbox_func_new_or_delete, NULL, NULL
+	RLIST_LINK_INITIALIZER, lbox_func_new_or_delete, NULL, NULL, NULL
 };
 
 static const struct luaL_Reg boxlib_internal[] = {

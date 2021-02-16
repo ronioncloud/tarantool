@@ -169,7 +169,7 @@ session_create_on_demand(void)
 	if (s == NULL)
 		return NULL;
 	s->fiber_on_stop = {
-		RLIST_LINK_INITIALIZER, session_on_stop, NULL, NULL
+		RLIST_LINK_INITIALIZER, session_on_stop, NULL, NULL, NULL
 	};
 	/* Add a trigger to destroy session on fiber stop */
 	trigger_add(&fiber()->on_stop, &s->fiber_on_stop);

@@ -4523,7 +4523,7 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 }
 
 static struct trigger on_replace_vinyl_deferred_delete = {
-	RLIST_LINK_INITIALIZER, vy_deferred_delete_on_replace, NULL, NULL
+	RLIST_LINK_INITIALIZER, vy_deferred_delete_on_replace, NULL, NULL, NULL
 };
 
 /* }}} Deferred DELETE handling */

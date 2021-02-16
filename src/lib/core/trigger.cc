@@ -31,6 +31,16 @@
 
 #include "trigger.h"
 
+#include "fiber.h"
+
+static int
+trigger_fiber_f(va_list ap)
+{
+	struct trigger *trigger = va_arg(ap, struct trigger *);
+	void *event = va_arg(ap, void *);
+	return trigger->run(trigger, event);
+}
+
 int
 trigger_run(struct rlist *list, void *event)
 {
@@ -49,4 +59,45 @@ trigger_run_reverse(struct rlist *list, void *event)
 		if (trigger->run(trigger, event) != 0)
 			return -1;
 	return 0;
+}
+
+void
+trigger_fiber_run_reverse(struct rlist *list, void *event, double timeout)
+{
+	struct trigger *trigger, *tmp;
+	unsigned num = 1;
+
+	rlist_foreach_entry_safe_reverse(trigger, list, link, tmp) {
+		char name[FIBER_NAME_INLINE];
+		snprintf(name, FIBER_NAME_INLINE, "trigger_fiber%d", num++);
+		trigger->fiber = fiber_new(name, trigger_fiber_f);
+		if (trigger->fiber != NULL) {
+			fiber_set_joinable(trigger->fiber, true);
+			fiber_start(trigger->fiber, trigger, event);
+		} else {
+			diag_log();
+			diag_clear(diag_get());
+			/*
+			 * In case we can't create fiber,
+			 * run trigger here immediately.
+			 */
+			if (trigger->run(trigger, event) != 0 &&
+			    ! diag_is_empty(diag_get())) {
+				diag_log();
+				diag_clear(diag_get());
+			}
+		}
+	}
+
+	/*
+	 * Waiting for all triggers completion
+	 */
+	rlist_foreach_entry_safe_reverse(trigger, list, link, tmp) {
+		if (trigger->fiber != NULL &&
+		    fiber_join_timeout(trigger->fiber, timeout) != 0 &&
+		    ! diag_is_empty(diag_get())) {
+			diag_log();
+			diag_clear(diag_get());
+		}
+	}
 }

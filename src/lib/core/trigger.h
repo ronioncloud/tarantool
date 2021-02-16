@@ -39,6 +39,7 @@ extern "C" {
  * Type of the callback which may be invoked
  * on an event.
  */
+struct fiber;
 struct trigger;
 typedef int (*trigger_f)(struct trigger *trigger, void *event);
 typedef void (*trigger_f0)(struct trigger *trigger);
@@ -57,6 +58,12 @@ struct trigger
 	 * or the object containing the trigger is destroyed.
 	 */
 	trigger_f0 destroy;
+	/**
+	 * Fiber in which the trigger is triggered,
+	 * used in the trigger_finger_run for
+	 * trigger_fiber_run_reverse functions
+	 */
+	struct fiber *fiber;
 };
 
 static inline void
@@ -67,6 +74,7 @@ trigger_create(struct trigger *trigger, trigger_f run, void *data,
 	trigger->run = run;
 	trigger->data = data;
 	trigger->destroy = destroy;
+	trigger->fiber = NULL;
 }
 
 static inline void
@@ -130,6 +138,15 @@ trigger_run(struct rlist *list, void *event);
  */
 int
 trigger_run_reverse(struct rlist *list, void *event);
+
+/**
+ * Run registered triggers in fibers in reverse order, i.e.
+ * it runs triggers in the same order they were added. Wait
+ * for their completion for a specified period of time.
+ */
+void
+trigger_fiber_run_reverse(struct rlist *list, void *event, double timeout);
+
 
 #if defined(__cplusplus)
 } /* extern "C" */

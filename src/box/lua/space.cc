@@ -530,7 +530,7 @@ box_lua_space_new_or_delete(struct trigger *trigger, void *event)
 }
 
 static struct trigger on_alter_space_in_lua = {
-	RLIST_LINK_INITIALIZER, box_lua_space_new_or_delete, NULL, NULL
+	RLIST_LINK_INITIALIZER, box_lua_space_new_or_delete, NULL, NULL, NULL
 };
 
 /**
