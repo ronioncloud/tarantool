@@ -609,9 +609,17 @@ fiber_reschedule(void)
 int
 fiber_join(struct fiber *fiber)
 {
+	int rc = fiber_join_timeout(fiber, TIMEOUT_INFINITY);
+	return rc;
+}
+
+int
+fiber_join_timeout(struct fiber *fiber, double timeout)
+{
 	assert(fiber->flags & FIBER_IS_JOINABLE);
 
 	if (! fiber_is_dead(fiber)) {
+		bool exceeded = false;
 		do {
 			/*
 			 * In case fiber is cancelled during yield
@@ -620,8 +628,25 @@ fiber_join(struct fiber *fiber)
 			 * to put it back in.
 			 */
 			rlist_add_tail_entry(&fiber->wake, fiber(), state);
-			fiber_yield();
-		} while (! fiber_is_dead(fiber));
+			if (timeout != TIMEOUT_INFINITY) {
+				double time = fiber_time();
+				exceeded = fiber_yield_timeout(timeout);
+				timeout -= (fiber_time() - time);
+			} else {
+				fiber_yield();
+			}
+		} while (! fiber_is_dead(fiber) && ! exceeded && timeout > 0);
+	}
+
+	if (! fiber_is_dead(fiber)) {
+#if defined (TARGET_OS_FREEBSD) || defined (TARGET_OS_NETBSD) || \
+    defined (TARGET_OS_OPENBSD)
+		errno = ETIMEDOUT;
+#else
+		errno = ETIME;
+#endif
+		diag_set(SystemError, "failed to join fiber");
+		return -1;
 	}
 
 	/* Move exception to the caller */
