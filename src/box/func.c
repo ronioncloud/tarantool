@@ -160,6 +160,21 @@ module_cache_put(struct module *module)
 }
 
 /**
+ * Update the module cache.
+ */
+static void
+module_cache_update(struct module *module)
+{
+	const char *package = module->cmod->package;
+	size_t package_len = module->cmod->package_len;
+	mh_int_t i = mh_strnptr_find_inp(modules, package, package_len);
+	if (i == mh_end(modules))
+		panic("failed to update module cache");
+	mh_strnptr_node(modules, i)->str = package;
+	mh_strnptr_node(modules, i)->val = module;
+}
+
+/**
  * Delete a module from the module cache
  */
 static void
@@ -281,9 +296,7 @@ module_reload(const char *package, const char *package_end)
 		func->module = new_module;
 		rlist_move(&new_module->funcs, &func->item);
 	}
-	module_cache_del(package, package_end);
-	if (module_cache_put(new_module) != 0)
-		goto restore;
+	module_cache_update(new_module);
 	module_gc(old_module);
 	return 0;
 restore:
