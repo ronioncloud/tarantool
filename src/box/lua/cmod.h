@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include "box/func_def.h"
 #include "trivia/config.h"
 
 #if defined(__cplusplus)
@@ -109,6 +110,20 @@ cmod_new(const char *package, size_t package_len, const char *source_path);
 int
 cmod_find_package(const char *package, size_t package_len,
 		  char *path, size_t path_len);
+
+/**
+ * Execute a function.
+ *
+ * @param m the module function sits in.
+ * @param func_addr function address to call.
+ * @args args incoming arguments.
+ * @ret rets execution results.
+ *
+ * @return 0 on success, -1 otherwise(diag is set).
+ */
+int
+cmod_call(struct cmod *m, box_function_f func_addr,
+	  struct port *args, struct port *ret);
 
 /**
  * Initialize cmod Lua module.

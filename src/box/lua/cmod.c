@@ -12,7 +12,6 @@
 
 #include "box/error.h"
 #include "box/port.h"
-#include "box/func_def.h"
 
 #include "tt_static.h"
 
@@ -805,9 +804,9 @@ lfunc_gc(struct lua_State *L)
 	return 0;
 }
 
-/** Execute a function. */
 int
-do_lfunc_call(struct cmod_func *cf, struct port *args, struct port *ret)
+cmod_call(struct cmod *m, box_function_f func_addr,
+	  struct port *args, struct port *ret)
 {
 	struct region *region = &fiber()->gc;
 	size_t region_svp = region_used(region);
@@ -823,17 +822,12 @@ do_lfunc_call(struct cmod_func *cf, struct port *args, struct port *ret)
 	};
 
 	/*
-	 * Unlike box.schema.func cmod doesn't support
-	 * module run-time reloading and while a function
-	 * is alive a module can't disappear. Still it is
-	 * unclear if there some existing users are running
-	 * code which already tries to unload a function inside
-	 * this call execution, thus make sure the module won't
-	 * disapper inbetween.
+	 * The function may get rescheduled inside,
+	 * thus make sure the module won't disappear.
 	 */
-	cmod_ref(cf->cmod);
-	int rc = cf->addr(&ctx, data, data + data_sz);
-	cmod_unref(cf->cmod);
+	cmod_ref(m);
+	int rc = func_addr(&ctx, data, data + data_sz);
+	cmod_unref(m);
 	region_truncate(region, region_svp);
 
 	if (rc != 0) {
@@ -843,7 +837,7 @@ do_lfunc_call(struct cmod_func *cf, struct port *args, struct port *ret)
 		return -1;
 	}
 
-	return rc;
+	return 0;
 }
 
 /** Call a function by its name from the Lua code. */
@@ -869,7 +863,7 @@ lfunc_call(struct lua_State *L)
 
 	struct port ret;
 
-	if (do_lfunc_call(cf, &args, &ret) != 0) {
+	if (cmod_call(cf->cmod, cf->addr, &args, &ret) != 0) {
 		port_destroy(&args);
 		return luaT_error(L);
 	}
