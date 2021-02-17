@@ -200,7 +200,6 @@ module_new(struct cmod *cmod)
 	}
 
 	rlist_create(&module->funcs);
-	module->calls = 0;
 	module->cmod = cmod;
 
 	return module;
@@ -254,7 +253,7 @@ module_delete(struct module *module)
 static void
 module_gc(struct module *module)
 {
-	if (rlist_empty(&module->funcs) && module->calls == 0)
+	if (rlist_empty(&module->funcs))
 		module_delete(module);
 }
 
@@ -513,32 +512,9 @@ func_c_call(struct func *base, struct port *args, struct port *ret)
 			return -1;
 	}
 
-	struct region *region = &fiber()->gc;
-	size_t region_svp = region_used(region);
-	uint32_t data_sz;
-	const char *data = port_get_msgpack(args, &data_sz);
-	if (data == NULL)
-		return -1;
-
-	port_c_create(ret);
-	box_function_ctx_t ctx = { ret };
-
-	/* Module can be changed after function reload. */
 	struct module *module = func->module;
-	assert(module != NULL);
-	++module->calls;
-	int rc = func->func(&ctx, data, data + data_sz);
-	--module->calls;
+	int rc = cmod_call(module->cmod, func->func, args, ret);
 	module_gc(module);
-	region_truncate(region, region_svp);
-	if (rc != 0) {
-		if (diag_last_error(&fiber()->diag) == NULL) {
-			/* Stored procedure forget to set diag  */
-			diag_set(ClientError, ER_PROC_C, "unknown error");
-		}
-		port_destroy(ret);
-		return -1;
-	}
 	return rc;
 }
 
