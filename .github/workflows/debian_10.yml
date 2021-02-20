@@ -29,7 +29,7 @@ jobs:
           # Our testing expects that the init process (PID 1) will
           # reap orphan processes. At least the following test leans
           # on it: app-tap/gh-4983-tnt-e-assert-false-hangs.test.lua.
-          PACKPACK_EXTRA_DOCKER_RUN_PARAMS: '--init'
+          PACKPACK_EXTRA_DOCKER_RUN_PARAMS: '--init --network="host"'
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_S3_ENDPOINT_URL: ${{ secrets.AWS_S3_ENDPOINT_URL }}
